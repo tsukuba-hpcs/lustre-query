@@ -36,7 +36,6 @@ static inline uint16_t ReadBE16(const uint8_t *p) {
 }
 
 static void PopulateInodeMetadata(LustreInode &out, ext2_ino_t ino, const struct ext2_inode_large &inode) {
-	out = LustreInode();
 	out.ino = ino;
 	out.mode = inode.i_mode;
 	out.nlink = inode.i_links_count;
@@ -50,6 +49,8 @@ static void PopulateInodeMetadata(LustreInode &out, ext2_ino_t ino, const struct
 	out.atime = inode.i_atime;
 	out.mtime = inode.i_mtime;
 	out.ctime = inode.i_ctime;
+	out.fid = LustreFID();
+	out.parent_fid = LustreFID();
 	out.type = ModeToFileType(out.mode);
 	out.flags = inode.i_flags;
 	out.projid = inode.i_projid;
@@ -150,9 +151,15 @@ void MDTScanner::Open(const std::string &device_path) {
 	next_block_group_.store(0);
 	scanned_inodes_.store(0);
 	valid_inodes_.store(0);
+	total_inodes_ = fs_->super ? fs_->super->s_inodes_count : 0;
+	block_group_count_ = fs_->group_desc_count;
+	inodes_per_group_ = fs_->super ? fs_->super->s_inodes_per_group : 0;
+	block_size_ = fs_->blocksize;
+	inode_size_ = fs_->super ? EXT2_INODE_SIZE(fs_->super) : 0;
 	buffered_inode_ = 0;
 	inode_buffer_.clear();
 	xattr_block_buffer_.clear();
+	xattr_value_buffer_.clear();
 	buffered_xattr_block_loaded_ = false;
 	buffered_xattr_block_valid_ = false;
 
@@ -183,6 +190,11 @@ void MDTScanner::Close() {
 		ext2fs_close(fs_);
 		fs_ = nullptr;
 	}
+	total_inodes_ = 0;
+	block_group_count_ = 0;
+	inodes_per_group_ = 0;
+	block_size_ = 0;
+	inode_size_ = 0;
 }
 
 //===----------------------------------------------------------------------===//
@@ -190,8 +202,7 @@ void MDTScanner::Close() {
 //===----------------------------------------------------------------------===//
 
 uint64_t MDTScanner::GetTotalInodes() const {
-	if (!fs_ || !fs_->super) return 0;
-	return fs_->super->s_inodes_count;
+	return total_inodes_;
 }
 
 uint64_t MDTScanner::GetUsedInodes() const {
@@ -200,23 +211,19 @@ uint64_t MDTScanner::GetUsedInodes() const {
 }
 
 uint32_t MDTScanner::GetBlockGroupCount() const {
-	if (!fs_) return 0;
-	return fs_->group_desc_count;
+	return block_group_count_;
 }
 
 uint32_t MDTScanner::GetInodesPerGroup() const {
-	if (!fs_ || !fs_->super) return 0;
-	return fs_->super->s_inodes_per_group;
+	return inodes_per_group_;
 }
 
 uint32_t MDTScanner::GetBlockSize() const {
-	if (!fs_) return 0;
-	return fs_->blocksize;
+	return block_size_;
 }
 
 uint32_t MDTScanner::GetInodeSize() const {
-	if (!fs_ || !fs_->super) return 0;
-	return EXT2_INODE_SIZE(fs_->super);
+	return inode_size_;
 }
 
 //===----------------------------------------------------------------------===//
@@ -301,7 +308,7 @@ void MDTScanner::ResetBlockGroupCounter() {
 //===----------------------------------------------------------------------===//
 
 void MDTScanner::EnsureInodeBuffer() {
-	auto inode_size = static_cast<size_t>(GetInodeSize());
+	auto inode_size = static_cast<size_t>(inode_size_);
 	if (inode_size < sizeof(struct ext2_inode_large)) {
 		inode_size = sizeof(struct ext2_inode_large);
 	}
@@ -311,7 +318,7 @@ void MDTScanner::EnsureInodeBuffer() {
 }
 
 void MDTScanner::EnsureXattrBlockBuffer() {
-	auto block_size = static_cast<size_t>(GetBlockSize());
+	auto block_size = static_cast<size_t>(block_size_);
 	if (block_size == 0) {
 		return;
 	}
@@ -363,10 +370,9 @@ bool MDTScanner::GetNextRawInode(ext2_ino_t &ino, struct ext2_inode_large &raw) 
 	}
 
 	EnsureInodeBuffer();
-	auto inode_size = static_cast<int>(GetInodeSize());
+	auto inode_size = static_cast<int>(inode_size_);
 
 	while (true) {
-		memset(inode_buffer_.data(), 0, inode_buffer_.size());
 		errcode_t err = ext2fs_get_next_inode_full(scan_, &ino,
 			reinterpret_cast<struct ext2_inode *>(inode_buffer_.data()), inode_size);
 		if (err) {
@@ -408,10 +414,9 @@ bool MDTScanner::GetNextRawInode(ext2_ino_t &ino, struct ext2_inode_large &raw, 
 	}
 
 	EnsureInodeBuffer();
-	auto inode_size = static_cast<int>(GetInodeSize());
+	auto inode_size = static_cast<int>(inode_size_);
 
 	while (true) {
-		memset(inode_buffer_.data(), 0, inode_buffer_.size());
 		errcode_t err = ext2fs_get_next_inode_full(scan_, &ino,
 			reinterpret_cast<struct ext2_inode *>(inode_buffer_.data()), inode_size);
 		if (err) {
@@ -453,10 +458,8 @@ bool MDTScanner::ReadRawInode(ext2_ino_t ino, struct ext2_inode_large &raw) {
 	}
 
 	EnsureInodeBuffer();
-	memset(inode_buffer_.data(), 0, inode_buffer_.size());
-
 	errcode_t err = ext2fs_read_inode_full(fs_, ino,
-		reinterpret_cast<struct ext2_inode *>(inode_buffer_.data()), static_cast<int>(GetInodeSize()));
+		reinterpret_cast<struct ext2_inode *>(inode_buffer_.data()), static_cast<int>(inode_size_));
 	if (err) {
 		return false;
 	}
@@ -508,13 +511,13 @@ bool MDTScanner::FindBufferedXattrValue(uint8_t name_index, const char *short_na
 	XattrValueRef result;
 
 	if (inode->i_extra_isize >= sizeof(inode->i_extra_isize) &&
-	    GetInodeSize() > EXT2_GOOD_OLD_INODE_SIZE + inode->i_extra_isize + sizeof(__u32) &&
+	    inode_size_ > EXT2_GOOD_OLD_INODE_SIZE + inode->i_extra_isize + sizeof(__u32) &&
 	    (inode->i_extra_isize & 3) == 0) {
 		__u32 magic = 0;
 		auto *ibody_start = inode_buffer_.data() + EXT2_GOOD_OLD_INODE_SIZE + inode->i_extra_isize;
 		memcpy(&magic, ibody_start, sizeof(magic));
 		if (magic == EXT2_EXT_ATTR_MAGIC) {
-			auto storage_size = static_cast<unsigned int>(GetInodeSize() - EXT2_GOOD_OLD_INODE_SIZE -
+			auto storage_size = static_cast<unsigned int>(inode_size_ - EXT2_GOOD_OLD_INODE_SIZE -
 			                                             inode->i_extra_isize - sizeof(__u32));
 			auto *entries = reinterpret_cast<struct ext2_ext_attr_entry *>(ibody_start + sizeof(__u32));
 			if (FindXattrEntryInRegion(name_index, short_name, short_name_len,
@@ -537,7 +540,7 @@ bool MDTScanner::FindBufferedXattrValue(uint8_t name_index, const char *short_na
 
 	auto *entries = reinterpret_cast<struct ext2_ext_attr_entry *>(xattr_block_buffer_.data() +
 	                                                               sizeof(struct ext2_ext_attr_header));
-	auto storage_size = static_cast<unsigned int>(GetBlockSize() - sizeof(struct ext2_ext_attr_header));
+	auto storage_size = static_cast<unsigned int>(block_size_ - sizeof(struct ext2_ext_attr_header));
 	if (FindXattrEntryInRegion(name_index, short_name, short_name_len,
 	                           entries, storage_size, xattr_block_buffer_.data(),
 	                           xattr_block_buffer_.size(), result)) {
@@ -750,36 +753,7 @@ bool MDTScanner::GetNextInode(LustreInode &out, const MDTScanConfig &config) {
 			return false;
 		}
 
-		// Convert all inode metadata
-		out = LustreInode();
-		out.ino = ino;
-		out.mode = inode.i_mode;
-		out.nlink = inode.i_links_count;
-
-		// UID/GID with high bits (32-bit support)
-		out.uid = inode.i_uid | ((uint32_t)inode.osd2.linux2.l_i_uid_high << 16);
-		out.gid = inode.i_gid | ((uint32_t)inode.osd2.linux2.l_i_gid_high << 16);
-
-		// Size (64-bit) - initial value from inode
-		out.size = inode.i_size;
-		if (ModeToFileType(out.mode) != FileType::DIRECTORY) {
-			out.size |= ((uint64_t)inode.i_size_high << 32);
-		}
-		out.blocks = inode.i_blocks;
-
-		// Timestamps
-		out.atime = inode.i_atime;
-		out.mtime = inode.i_mtime;
-		out.ctime = inode.i_ctime;
-
-		// File type
-		out.type = ModeToFileType(out.mode);
-
-		// Flags
-		out.flags = inode.i_flags;
-
-		// Projid
-		out.projid = inode.i_projid;
+		PopulateInodeMetadata(out, ino, inode);
 
 		if (!config.read_xattrs) {
 			if (!PassesXattrSkipChecksFast(ino, config)) {
@@ -819,36 +793,7 @@ bool MDTScanner::GetNextInode(LustreInode &out, const MDTScanConfig &config, ext
 			return false;
 		}
 
-		// Convert all inode metadata
-		out = LustreInode();
-		out.ino = ino;
-		out.mode = inode.i_mode;
-		out.nlink = inode.i_links_count;
-
-		// UID/GID with high bits (32-bit support)
-		out.uid = inode.i_uid | ((uint32_t)inode.osd2.linux2.l_i_uid_high << 16);
-		out.gid = inode.i_gid | ((uint32_t)inode.osd2.linux2.l_i_gid_high << 16);
-
-		// Size (64-bit) - initial value from inode
-		out.size = inode.i_size;
-		if (ModeToFileType(out.mode) != FileType::DIRECTORY) {
-			out.size |= ((uint64_t)inode.i_size_high << 32);
-		}
-		out.blocks = inode.i_blocks;
-
-		// Timestamps
-		out.atime = inode.i_atime;
-		out.mtime = inode.i_mtime;
-		out.ctime = inode.i_ctime;
-
-		// File type
-		out.type = ModeToFileType(out.mode);
-
-		// Flags
-		out.flags = inode.i_flags;
-
-		// Projid
-		out.projid = inode.i_projid;
+		PopulateInodeMetadata(out, ino, inode);
 
 		if (!config.read_xattrs) {
 			if (!PassesXattrSkipChecksFast(ino, config)) {
@@ -1056,35 +1001,7 @@ bool MDTScanner::ReadInode(ext2_ino_t ino, LustreInode &out, const MDTScanConfig
 	}
 
 	// Convert to LustreInode (same logic as GetNextInode)
-	out = LustreInode();
-	out.ino = ino;
-	out.mode = inode.i_mode;
-	out.nlink = inode.i_links_count;
-
-	// UID/GID with high bits (32-bit support)
-	out.uid = inode.i_uid | ((uint32_t)inode.osd2.linux2.l_i_uid_high << 16);
-	out.gid = inode.i_gid | ((uint32_t)inode.osd2.linux2.l_i_gid_high << 16);
-
-	// Size (64-bit)
-	out.size = inode.i_size;
-	if (ModeToFileType(out.mode) != FileType::DIRECTORY) {
-		out.size |= ((uint64_t)inode.i_size_high << 32);
-	}
-	out.blocks = inode.i_blocks;
-
-	// Timestamps
-	out.atime = inode.i_atime;
-	out.mtime = inode.i_mtime;
-	out.ctime = inode.i_ctime;
-
-	// File type
-	out.type = ModeToFileType(out.mode);
-
-	// Flags
-	out.flags = inode.i_flags;
-
-	// Projid
-	out.projid = inode.i_projid;
+	PopulateInodeMetadata(out, ino, inode);
 
 	if (!config.read_xattrs) {
 		return PassesXattrSkipChecksFast(ino, config);
@@ -1122,23 +1039,7 @@ bool MDTScanner::ReadInodeLinks(ext2_ino_t ino, LustreInode &inode_out, std::vec
 		return false;
 	}
 
-	inode_out = LustreInode();
-	inode_out.ino = ino;
-	inode_out.mode = inode.i_mode;
-	inode_out.nlink = inode.i_links_count;
-	inode_out.uid = inode.i_uid | ((uint32_t)inode.osd2.linux2.l_i_uid_high << 16);
-	inode_out.gid = inode.i_gid | ((uint32_t)inode.osd2.linux2.l_i_gid_high << 16);
-	inode_out.size = inode.i_size;
-	if (ModeToFileType(inode_out.mode) != FileType::DIRECTORY) {
-		inode_out.size |= ((uint64_t)inode.i_size_high << 32);
-	}
-	inode_out.blocks = inode.i_blocks;
-	inode_out.atime = inode.i_atime;
-	inode_out.mtime = inode.i_mtime;
-	inode_out.ctime = inode.i_ctime;
-	inode_out.type = ModeToFileType(inode_out.mode);
-	inode_out.flags = inode.i_flags;
-	inode_out.projid = inode.i_projid;
+	PopulateInodeMetadata(inode_out, ino, inode);
 
 	ParseBufferedFID(inode_out.fid);
 	ParseBufferedLinkEA(links_out);

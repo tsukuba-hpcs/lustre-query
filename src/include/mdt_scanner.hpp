@@ -308,6 +308,11 @@ private:
 	ext2_inode_scan scan_;        // Inode scan handle
 	std::string device_path_;     // Device path
 	struct oi_context *oi_ctx_;   // OI lookup context (separate ext2_filsys handle)
+	uint64_t total_inodes_ = 0;
+	uint32_t block_group_count_ = 0;
+	uint32_t inodes_per_group_ = 0;
+	uint32_t block_size_ = 0;
+	uint32_t inode_size_ = 0;
 	std::vector<char> inode_buffer_;
 	std::vector<char> xattr_block_buffer_;
 	std::vector<char> xattr_value_buffer_;
