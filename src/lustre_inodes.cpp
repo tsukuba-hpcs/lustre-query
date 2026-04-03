@@ -154,10 +154,6 @@ static bool InodeColumnRequiresXattrs(idx_t actual_column_idx) {
 }
 
 static bool InodeScanRequiresXattrs(const TableFunctionInitInput &input, const MDTScanConfig &scan_config) {
-	if (scan_config.skip_no_fid || scan_config.skip_no_linkea) {
-		return true;
-	}
-
 	for (auto actual_column_idx : input.column_ids) {
 		if (InodeColumnRequiresXattrs(actual_column_idx)) {
 			return true;

@@ -269,6 +269,19 @@ private:
 	//! Ensure the reusable inode buffer matches the current filesystem's inode size
 	void EnsureInodeBuffer();
 
+	//! Ensure the reusable xattr block buffer matches the current filesystem's block size
+	void EnsureXattrBlockBuffer();
+
+	//! Fast path for skip_no_fid/skip_no_linkea without opening a full xattr handle
+	bool PassesXattrSkipChecksFast(ext2_ino_t ino, const MDTScanConfig &config);
+
+	//! Find an xattr value in the current buffered inode / EA block without allocating
+	bool FindBufferedXattrValue(uint8_t name_index, const char *short_name, size_t short_name_len,
+	                            const uint8_t *&value_ptr, size_t &value_len, ext2_ino_t &value_inum);
+
+	//! Read a prefix of an external EA inode value into the caller-provided buffer
+	bool ReadExternalXattrPrefix(ext2_ino_t value_ino, void *buf, unsigned int wanted, unsigned int &got);
+
 	//===----------------------------------------------------------------------===//
 	// Lustre Extended Attribute Parsing
 	//===----------------------------------------------------------------------===//
@@ -296,6 +309,7 @@ private:
 	std::string device_path_;     // Device path
 	struct oi_context *oi_ctx_;   // OI lookup context (separate ext2_filsys handle)
 	std::vector<char> inode_buffer_;
+	std::vector<char> xattr_block_buffer_;
 	ext2_ino_t buffered_inode_ = 0;
 
 	// For parallel block group scanning

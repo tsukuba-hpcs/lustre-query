@@ -58,6 +58,55 @@ static inline struct ext2_inode_large *GetBufferedInode(std::vector<char> &inode
 	return reinterpret_cast<struct ext2_inode_large *>(inode_buffer.data());
 }
 
+static constexpr uint8_t TRUSTED_XATTR_INDEX = 4;
+
+struct XattrValueRef {
+	const uint8_t *value_ptr = nullptr;
+	size_t value_len = 0;
+	ext2_ino_t value_inum = 0;
+	bool found = false;
+};
+
+static bool MatchXattrEntry(const struct ext2_ext_attr_entry *entry, uint8_t name_index,
+                            const char *short_name, size_t short_name_len) {
+	return entry->e_name_index == name_index &&
+	       entry->e_name_len == short_name_len &&
+	       memcmp(EXT2_EXT_ATTR_NAME(entry), short_name, short_name_len) == 0;
+}
+
+static bool FindXattrEntryInRegion(uint8_t name_index, const char *short_name, size_t short_name_len,
+                                   struct ext2_ext_attr_entry *entries, unsigned int storage_size,
+                                   char *value_start, size_t values_size, XattrValueRef &result) {
+	auto *entry = entries;
+	unsigned int remain = storage_size;
+
+	while (remain >= sizeof(struct ext2_ext_attr_entry) && !EXT2_EXT_IS_LAST_ENTRY(entry)) {
+		remain -= sizeof(struct ext2_ext_attr_entry);
+		auto name_storage = static_cast<unsigned int>(EXT2_EXT_ATTR_SIZE(entry->e_name_len));
+		if (name_storage > remain) {
+			return false;
+		}
+		remain -= name_storage;
+
+		if (MatchXattrEntry(entry, name_index, short_name, short_name_len)) {
+			result.found = true;
+			result.value_len = entry->e_value_size;
+			result.value_inum = entry->e_value_inum;
+			if (entry->e_value_inum == 0) {
+				if (static_cast<size_t>(entry->e_value_offs) + entry->e_value_size > values_size) {
+					return false;
+				}
+				result.value_ptr = reinterpret_cast<const uint8_t *>(value_start + entry->e_value_offs);
+			}
+			return true;
+		}
+
+		entry = EXT2_EXT_ATTR_NEXT(entry);
+	}
+
+	return false;
+}
+
 //===----------------------------------------------------------------------===//
 // Constructor / Destructor
 //===----------------------------------------------------------------------===//
@@ -102,6 +151,7 @@ void MDTScanner::Open(const std::string &device_path) {
 	valid_inodes_.store(0);
 	buffered_inode_ = 0;
 	inode_buffer_.clear();
+	xattr_block_buffer_.clear();
 
 	// Reset link iteration state
 	pending_inode_ = LustreInode();
@@ -117,6 +167,7 @@ void MDTScanner::Open(const std::string &device_path) {
 	skip_current_group_ = false;
 	buffered_inode_ = 0;
 	inode_buffer_.clear();
+	xattr_block_buffer_.clear();
 }
 
 void MDTScanner::Close() {
@@ -251,6 +302,16 @@ void MDTScanner::EnsureInodeBuffer() {
 	}
 	if (inode_buffer_.size() != inode_size) {
 		inode_buffer_.resize(inode_size);
+	}
+}
+
+void MDTScanner::EnsureXattrBlockBuffer() {
+	auto block_size = static_cast<size_t>(GetBlockSize());
+	if (block_size == 0) {
+		return;
+	}
+	if (xattr_block_buffer_.size() != block_size) {
+		xattr_block_buffer_.resize(block_size);
 	}
 }
 
@@ -413,6 +474,178 @@ bool MDTScanner::OpenAndReadXattrs(ext2_ino_t ino, struct ext2_xattr_handle *&h)
 	return true;
 }
 
+bool MDTScanner::FindBufferedXattrValue(uint8_t name_index, const char *short_name, size_t short_name_len,
+                                        const uint8_t *&value_ptr, size_t &value_len, ext2_ino_t &value_inum) {
+	value_ptr = nullptr;
+	value_len = 0;
+	value_inum = 0;
+
+	if (!fs_ || inode_buffer_.empty()) {
+		return false;
+	}
+
+	auto *inode = GetBufferedInode(inode_buffer_);
+	XattrValueRef result;
+
+	if (inode->i_extra_isize >= sizeof(inode->i_extra_isize) &&
+	    GetInodeSize() > EXT2_GOOD_OLD_INODE_SIZE + inode->i_extra_isize + sizeof(__u32) &&
+	    (inode->i_extra_isize & 3) == 0) {
+		__u32 magic = 0;
+		auto *ibody_start = inode_buffer_.data() + EXT2_GOOD_OLD_INODE_SIZE + inode->i_extra_isize;
+		memcpy(&magic, ibody_start, sizeof(magic));
+		if (magic == EXT2_EXT_ATTR_MAGIC) {
+			auto storage_size = static_cast<unsigned int>(GetInodeSize() - EXT2_GOOD_OLD_INODE_SIZE -
+			                                             inode->i_extra_isize - sizeof(__u32));
+			auto *entries = reinterpret_cast<struct ext2_ext_attr_entry *>(ibody_start + sizeof(__u32));
+			if (FindXattrEntryInRegion(name_index, short_name, short_name_len,
+			                           entries, storage_size, reinterpret_cast<char *>(entries),
+			                           storage_size, result)) {
+				value_ptr = result.value_ptr;
+				value_len = result.value_len;
+				value_inum = result.value_inum;
+				return result.found;
+			}
+		}
+	}
+
+	auto blk = ext2fs_file_acl_block(fs_, EXT2_INODE(inode));
+	if (blk == 0) {
+		return false;
+	}
+	if (blk < fs_->super->s_first_data_block || blk >= ext2fs_blocks_count(fs_->super)) {
+		return false;
+	}
+
+	EnsureXattrBlockBuffer();
+	errcode_t err = ext2fs_read_ext_attr3(fs_, blk, xattr_block_buffer_.data(), buffered_inode_);
+	if (err) {
+		return false;
+	}
+
+	auto *header = reinterpret_cast<struct ext2_ext_attr_header *>(xattr_block_buffer_.data());
+	if (header->h_magic != EXT2_EXT_ATTR_MAGIC) {
+		return false;
+	}
+
+	auto *entries = reinterpret_cast<struct ext2_ext_attr_entry *>(xattr_block_buffer_.data() +
+	                                                               sizeof(struct ext2_ext_attr_header));
+	auto storage_size = static_cast<unsigned int>(GetBlockSize() - sizeof(struct ext2_ext_attr_header));
+	if (FindXattrEntryInRegion(name_index, short_name, short_name_len,
+	                           entries, storage_size, xattr_block_buffer_.data(),
+	                           xattr_block_buffer_.size(), result)) {
+		value_ptr = result.value_ptr;
+		value_len = result.value_len;
+		value_inum = result.value_inum;
+		return result.found;
+	}
+
+	return false;
+}
+
+bool MDTScanner::ReadExternalXattrPrefix(ext2_ino_t value_ino, void *buf, unsigned int wanted, unsigned int &got) {
+	got = 0;
+	if (!fs_) {
+		return false;
+	}
+
+	ext2_file_t ea_file;
+	errcode_t err = ext2fs_file_open(fs_, value_ino, 0, &ea_file);
+	if (err) {
+		return false;
+	}
+
+	auto *ea_inode = ext2fs_file_get_inode(ea_file);
+	bool ok = false;
+	if (!(ea_inode->i_flags & EXT4_INLINE_DATA_FL) &&
+	    (ea_inode->i_flags & EXT4_EA_INODE_FL) &&
+	    ea_inode->i_links_count != 0 &&
+	    static_cast<__u64>(ext2fs_file_get_size(ea_file)) >= wanted &&
+	    ext2fs_file_read(ea_file, buf, wanted, &got) == 0 &&
+	    got == wanted) {
+		ok = true;
+	}
+
+	ext2fs_file_close(ea_file);
+	return ok;
+}
+
+bool MDTScanner::PassesXattrSkipChecksFast(ext2_ino_t ino, const MDTScanConfig &config) {
+	if (!config.skip_no_fid && !config.skip_no_linkea) {
+		return true;
+	}
+
+	if (buffered_inode_ != ino) {
+		struct ext2_inode_large raw;
+		if (!ReadRawInode(ino, raw)) {
+			return false;
+		}
+	}
+
+	if (config.skip_no_fid) {
+		const uint8_t *value_ptr = nullptr;
+		size_t value_len = 0;
+		ext2_ino_t value_inum = 0;
+		if (!FindBufferedXattrValue(TRUSTED_XATTR_INDEX, "lma", 3, value_ptr, value_len, value_inum)) {
+			return false;
+		}
+
+		uint8_t scratch[sizeof(LustreLMA)];
+		const uint8_t *fid_data = value_ptr;
+		if (value_inum != 0) {
+			unsigned int got = 0;
+			if (!ReadExternalXattrPrefix(value_inum, scratch, sizeof(scratch), got)) {
+				return false;
+			}
+			fid_data = scratch;
+			value_len = got;
+		}
+		if (!fid_data || value_len < LMA_FID_OFFSET + sizeof(uint64_t) + sizeof(uint32_t) + sizeof(uint32_t)) {
+			return false;
+		}
+
+		LustreFID fid;
+		memcpy(&fid.f_seq, fid_data + LMA_FID_OFFSET, sizeof(fid.f_seq));
+		memcpy(&fid.f_oid, fid_data + LMA_FID_OFFSET + 8, sizeof(fid.f_oid));
+		memcpy(&fid.f_ver, fid_data + LMA_FID_OFFSET + 12, sizeof(fid.f_ver));
+		if (!fid.IsValid()) {
+			return false;
+		}
+	}
+
+	if (config.skip_no_linkea) {
+		const uint8_t *value_ptr = nullptr;
+		size_t value_len = 0;
+		ext2_ino_t value_inum = 0;
+		if (!FindBufferedXattrValue(TRUSTED_XATTR_INDEX, "link", 4, value_ptr, value_len, value_inum)) {
+			return false;
+		}
+
+		uint8_t scratch[sizeof(LinkEAHeader)];
+		const uint8_t *link_data = value_ptr;
+		if (value_inum != 0) {
+			unsigned int got = 0;
+			if (!ReadExternalXattrPrefix(value_inum, scratch, sizeof(scratch), got)) {
+				return false;
+			}
+			link_data = scratch;
+			value_len = got;
+		}
+		if (!link_data || value_len < sizeof(LinkEAHeader)) {
+			return false;
+		}
+
+		uint32_t magic;
+		uint32_t reccount;
+		memcpy(&magic, link_data, sizeof(magic));
+		memcpy(&reccount, link_data + 4, sizeof(reccount));
+		if (magic != LINK_EA_MAGIC || reccount == 0) {
+			return false;
+		}
+	}
+
+	return true;
+}
+
 //===----------------------------------------------------------------------===//
 // GetNextInode - full metadata scan (for lustre_inodes)
 //===----------------------------------------------------------------------===//
@@ -458,6 +691,9 @@ bool MDTScanner::GetNextInode(LustreInode &out, const MDTScanConfig &config) {
 		out.projid = inode.i_projid;
 
 		if (!config.read_xattrs) {
+			if (!PassesXattrSkipChecksFast(ino, config)) {
+				continue;
+			}
 			valid_inodes_++;
 			return true;
 		}
@@ -542,6 +778,9 @@ bool MDTScanner::GetNextInode(LustreInode &out, const MDTScanConfig &config, ext
 		out.projid = inode.i_projid;
 
 		if (!config.read_xattrs) {
+			if (!PassesXattrSkipChecksFast(ino, config)) {
+				continue;
+			}
 			valid_inodes_++;
 			return true;
 		}
@@ -822,7 +1061,7 @@ bool MDTScanner::ReadInode(ext2_ino_t ino, LustreInode &out, const MDTScanConfig
 	out.projid = inode.i_projid;
 
 	if (!config.read_xattrs) {
-		return true;
+		return PassesXattrSkipChecksFast(ino, config);
 	}
 
 	// Read Lustre xattrs
