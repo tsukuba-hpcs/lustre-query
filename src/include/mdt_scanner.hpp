@@ -31,6 +31,8 @@ struct MDTScanConfig {
 	bool skip_no_fid = true;
 	//! Skip inodes without LinkEA (no hard link information) (default: true)
 	bool skip_no_linkea = true;
+	//! Internal optimization flag: false when raw inode metadata is sufficient
+	bool read_xattrs = true;
 };
 
 //===----------------------------------------------------------------------===//

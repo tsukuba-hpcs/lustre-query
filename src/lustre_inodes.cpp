@@ -142,6 +142,45 @@ static void ExtractFIDFilterValues(idx_t actual_col, const TableFilter &filter,
 	}
 }
 
+static bool InodeColumnRequiresXattrs(idx_t actual_column_idx) {
+	switch (static_cast<LustreColumnIdx>(actual_column_idx)) {
+	case LustreColumnIdx::FID:
+	case LustreColumnIdx::SIZE:
+	case LustreColumnIdx::BLOCKS:
+		return true;
+	default:
+		return false;
+	}
+}
+
+static bool InodeScanRequiresXattrs(const TableFunctionInitInput &input, const MDTScanConfig &scan_config) {
+	if (scan_config.skip_no_fid || scan_config.skip_no_linkea) {
+		return true;
+	}
+
+	for (auto actual_column_idx : input.column_ids) {
+		if (InodeColumnRequiresXattrs(actual_column_idx)) {
+			return true;
+		}
+	}
+
+	if (!input.filters) {
+		return false;
+	}
+
+	for (const auto &entry : input.filters->filters) {
+		idx_t filter_col_idx = entry.first;
+		if (filter_col_idx >= input.column_ids.size()) {
+			return true;
+		}
+		if (InodeColumnRequiresXattrs(input.column_ids[filter_col_idx])) {
+			return true;
+		}
+	}
+
+	return false;
+}
+
 //===----------------------------------------------------------------------===//
 // Bind Function
 //===----------------------------------------------------------------------===//
@@ -206,6 +245,7 @@ static unique_ptr<GlobalTableFunctionState> LustreInodesInitGlobal(ClientContext
 	auto &bind_data = input.bind_data->Cast<LustreQueryBindData>();
 	auto result = make_uniq<LustreQueryGlobalState>(bind_data.device_paths,
 	                                                input.column_ids, bind_data.scan_config);
+	result->scan_config.read_xattrs = InodeScanRequiresXattrs(input, result->scan_config);
 
 	// Compile filters for pushdown
 	if (input.filters) {

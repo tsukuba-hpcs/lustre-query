@@ -457,6 +457,11 @@ bool MDTScanner::GetNextInode(LustreInode &out, const MDTScanConfig &config) {
 		// Projid
 		out.projid = inode.i_projid;
 
+		if (!config.read_xattrs) {
+			valid_inodes_++;
+			return true;
+		}
+
 		// Read Lustre xattrs using ext2fs_xattrs_read_inode to avoid double inode read
 		struct ext2_xattr_handle *h = nullptr;
 		if (!OpenAndReadXattrs(ino, h)) {
@@ -535,6 +540,11 @@ bool MDTScanner::GetNextInode(LustreInode &out, const MDTScanConfig &config, ext
 
 		// Projid
 		out.projid = inode.i_projid;
+
+		if (!config.read_xattrs) {
+			valid_inodes_++;
+			return true;
+		}
 
 		// Read Lustre xattrs
 		struct ext2_xattr_handle *h = nullptr;
@@ -810,6 +820,10 @@ bool MDTScanner::ReadInode(ext2_ino_t ino, LustreInode &out, const MDTScanConfig
 
 	// Projid
 	out.projid = inode.i_projid;
+
+	if (!config.read_xattrs) {
+		return true;
+	}
 
 	// Read Lustre xattrs
 	struct ext2_xattr_handle *h = nullptr;
