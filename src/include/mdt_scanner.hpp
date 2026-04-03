@@ -272,6 +272,12 @@ private:
 	//! Ensure the reusable xattr block buffer matches the current filesystem's block size
 	void EnsureXattrBlockBuffer();
 
+	//! Clear per-inode cached xattr state
+	void InvalidateBufferedXattrState();
+
+	//! Load the current inode's external EA block into the reusable buffer
+	bool LoadBufferedExternalXattrBlock();
+
 	//! Fast path for skip_no_fid/skip_no_linkea without opening a full xattr handle
 	bool PassesXattrSkipChecksFast(ext2_ino_t ino, const MDTScanConfig &config);
 
@@ -281,6 +287,15 @@ private:
 
 	//! Read a prefix of an external EA inode value into the caller-provided buffer
 	bool ReadExternalXattrPrefix(ext2_ino_t value_ino, void *buf, unsigned int wanted, unsigned int &got);
+
+	//! Read the prefix of a buffered xattr value into a caller-provided scratch buffer when needed
+	bool ReadBufferedXattrPrefix(uint8_t name_index, const char *short_name, size_t short_name_len,
+	                             void *scratch, unsigned int wanted, const uint8_t *&value_ptr, size_t &value_len);
+
+	//! Direct parsers for lustre_inodes that avoid ext2_xattr_handle allocations
+	bool ParseBufferedFID(LustreFID &fid);
+	bool ParseBufferedSOM(uint64_t &size, uint64_t &blocks);
+	bool HasBufferedLinkEA();
 
 	//===----------------------------------------------------------------------===//
 	// Lustre Extended Attribute Parsing
@@ -311,6 +326,8 @@ private:
 	std::vector<char> inode_buffer_;
 	std::vector<char> xattr_block_buffer_;
 	ext2_ino_t buffered_inode_ = 0;
+	bool buffered_xattr_block_loaded_ = false;
+	bool buffered_xattr_block_valid_ = false;
 
 	// For parallel block group scanning
 	std::atomic<int> next_block_group_;

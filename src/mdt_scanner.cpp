@@ -152,6 +152,8 @@ void MDTScanner::Open(const std::string &device_path) {
 	buffered_inode_ = 0;
 	inode_buffer_.clear();
 	xattr_block_buffer_.clear();
+	buffered_xattr_block_loaded_ = false;
+	buffered_xattr_block_valid_ = false;
 
 	// Reset link iteration state
 	pending_inode_ = LustreInode();
@@ -168,6 +170,8 @@ void MDTScanner::Open(const std::string &device_path) {
 	buffered_inode_ = 0;
 	inode_buffer_.clear();
 	xattr_block_buffer_.clear();
+	buffered_xattr_block_loaded_ = false;
+	buffered_xattr_block_valid_ = false;
 }
 
 void MDTScanner::Close() {
@@ -315,6 +319,43 @@ void MDTScanner::EnsureXattrBlockBuffer() {
 	}
 }
 
+void MDTScanner::InvalidateBufferedXattrState() {
+	buffered_xattr_block_loaded_ = false;
+	buffered_xattr_block_valid_ = false;
+}
+
+bool MDTScanner::LoadBufferedExternalXattrBlock() {
+	buffered_xattr_block_loaded_ = true;
+	buffered_xattr_block_valid_ = false;
+
+	if (!fs_ || inode_buffer_.empty()) {
+		return false;
+	}
+
+	auto *inode = GetBufferedInode(inode_buffer_);
+	auto blk = ext2fs_file_acl_block(fs_, EXT2_INODE(inode));
+	if (blk == 0) {
+		return false;
+	}
+	if (blk < fs_->super->s_first_data_block || blk >= ext2fs_blocks_count(fs_->super)) {
+		return false;
+	}
+
+	EnsureXattrBlockBuffer();
+	errcode_t err = ext2fs_read_ext_attr3(fs_, blk, xattr_block_buffer_.data(), buffered_inode_);
+	if (err) {
+		return false;
+	}
+
+	auto *header = reinterpret_cast<struct ext2_ext_attr_header *>(xattr_block_buffer_.data());
+	if (header->h_magic != EXT2_EXT_ATTR_MAGIC) {
+		return false;
+	}
+
+	buffered_xattr_block_valid_ = true;
+	return true;
+}
+
 bool MDTScanner::GetNextRawInode(ext2_ino_t &ino, struct ext2_inode_large &raw) {
 	if (!scan_) {
 		throw IOException("Inode scan not started for '%s'", device_path_);
@@ -338,6 +379,7 @@ bool MDTScanner::GetNextRawInode(ext2_ino_t &ino, struct ext2_inode_large &raw) 
 
 		raw = *GetBufferedInode(inode_buffer_);
 		buffered_inode_ = ino;
+		InvalidateBufferedXattrState();
 		scanned_inodes_++;
 
 		// Skip unused inodes (all zeros)
@@ -387,6 +429,7 @@ bool MDTScanner::GetNextRawInode(ext2_ino_t &ino, struct ext2_inode_large &raw, 
 
 		raw = *GetBufferedInode(inode_buffer_);
 		buffered_inode_ = ino;
+		InvalidateBufferedXattrState();
 		scanned_inodes_++;
 
 		// Skip unused inodes (all zeros)
@@ -419,6 +462,7 @@ bool MDTScanner::ReadRawInode(ext2_ino_t ino, struct ext2_inode_large &raw) {
 
 	raw = *GetBufferedInode(inode_buffer_);
 	buffered_inode_ = ino;
+	InvalidateBufferedXattrState();
 
 	if (raw.i_mode == 0 && raw.i_links_count == 0) {
 		return false;
@@ -508,22 +552,10 @@ bool MDTScanner::FindBufferedXattrValue(uint8_t name_index, const char *short_na
 		}
 	}
 
-	auto blk = ext2fs_file_acl_block(fs_, EXT2_INODE(inode));
-	if (blk == 0) {
+	if (!buffered_xattr_block_loaded_ && !LoadBufferedExternalXattrBlock()) {
 		return false;
 	}
-	if (blk < fs_->super->s_first_data_block || blk >= ext2fs_blocks_count(fs_->super)) {
-		return false;
-	}
-
-	EnsureXattrBlockBuffer();
-	errcode_t err = ext2fs_read_ext_attr3(fs_, blk, xattr_block_buffer_.data(), buffered_inode_);
-	if (err) {
-		return false;
-	}
-
-	auto *header = reinterpret_cast<struct ext2_ext_attr_header *>(xattr_block_buffer_.data());
-	if (header->h_magic != EXT2_EXT_ATTR_MAGIC) {
+	if (!buffered_xattr_block_valid_) {
 		return false;
 	}
 
@@ -569,6 +601,91 @@ bool MDTScanner::ReadExternalXattrPrefix(ext2_ino_t value_ino, void *buf, unsign
 	return ok;
 }
 
+bool MDTScanner::ReadBufferedXattrPrefix(uint8_t name_index, const char *short_name, size_t short_name_len,
+                                         void *scratch, unsigned int wanted, const uint8_t *&value_ptr,
+                                         size_t &value_len) {
+	ext2_ino_t value_inum = 0;
+	if (!FindBufferedXattrValue(name_index, short_name, short_name_len, value_ptr, value_len, value_inum)) {
+		return false;
+	}
+
+	if (value_len < wanted) {
+		return false;
+	}
+
+	if (value_inum == 0) {
+		return true;
+	}
+
+	unsigned int got = 0;
+	if (!ReadExternalXattrPrefix(value_inum, scratch, wanted, got)) {
+		return false;
+	}
+
+	value_ptr = static_cast<const uint8_t *>(scratch);
+	value_len = got;
+	return true;
+}
+
+bool MDTScanner::ParseBufferedFID(LustreFID &fid) {
+	fid = LustreFID();
+
+	uint8_t scratch[sizeof(LustreLMA)];
+	const uint8_t *value_ptr = nullptr;
+	size_t value_len = 0;
+	if (!ReadBufferedXattrPrefix(TRUSTED_XATTR_INDEX, "lma", 3, scratch, sizeof(scratch), value_ptr, value_len)) {
+		return false;
+	}
+	if (!value_ptr || value_len < LMA_FID_OFFSET + sizeof(fid.f_seq) + sizeof(fid.f_oid) + sizeof(fid.f_ver)) {
+		return false;
+	}
+
+	memcpy(&fid.f_seq, value_ptr + LMA_FID_OFFSET, sizeof(fid.f_seq));
+	memcpy(&fid.f_oid, value_ptr + LMA_FID_OFFSET + 8, sizeof(fid.f_oid));
+	memcpy(&fid.f_ver, value_ptr + LMA_FID_OFFSET + 12, sizeof(fid.f_ver));
+	return fid.IsValid();
+}
+
+bool MDTScanner::ParseBufferedSOM(uint64_t &size, uint64_t &blocks) {
+	uint8_t scratch[sizeof(LustreSOM)];
+	const uint8_t *value_ptr = nullptr;
+	size_t value_len = 0;
+	if (!ReadBufferedXattrPrefix(TRUSTED_XATTR_INDEX, "som", 3, scratch, sizeof(scratch), value_ptr, value_len)) {
+		return false;
+	}
+	if (!value_ptr || value_len < sizeof(LustreSOM)) {
+		return false;
+	}
+
+	uint16_t valid;
+	memcpy(&valid, value_ptr, sizeof(valid));
+	if (valid == 0) {
+		return false;
+	}
+
+	memcpy(&size, value_ptr + 8, sizeof(size));
+	memcpy(&blocks, value_ptr + 16, sizeof(blocks));
+	return true;
+}
+
+bool MDTScanner::HasBufferedLinkEA() {
+	uint8_t scratch[sizeof(LinkEAHeader)];
+	const uint8_t *value_ptr = nullptr;
+	size_t value_len = 0;
+	if (!ReadBufferedXattrPrefix(TRUSTED_XATTR_INDEX, "link", 4, scratch, sizeof(scratch), value_ptr, value_len)) {
+		return false;
+	}
+	if (!value_ptr || value_len < sizeof(LinkEAHeader)) {
+		return false;
+	}
+
+	uint32_t magic;
+	uint32_t reccount;
+	memcpy(&magic, value_ptr, sizeof(magic));
+	memcpy(&reccount, value_ptr + 4, sizeof(reccount));
+	return magic == LINK_EA_MAGIC && reccount != 0;
+}
+
 bool MDTScanner::PassesXattrSkipChecksFast(ext2_ino_t ino, const MDTScanConfig &config) {
 	if (!config.skip_no_fid && !config.skip_no_linkea) {
 		return true;
@@ -582,65 +699,14 @@ bool MDTScanner::PassesXattrSkipChecksFast(ext2_ino_t ino, const MDTScanConfig &
 	}
 
 	if (config.skip_no_fid) {
-		const uint8_t *value_ptr = nullptr;
-		size_t value_len = 0;
-		ext2_ino_t value_inum = 0;
-		if (!FindBufferedXattrValue(TRUSTED_XATTR_INDEX, "lma", 3, value_ptr, value_len, value_inum)) {
-			return false;
-		}
-
-		uint8_t scratch[sizeof(LustreLMA)];
-		const uint8_t *fid_data = value_ptr;
-		if (value_inum != 0) {
-			unsigned int got = 0;
-			if (!ReadExternalXattrPrefix(value_inum, scratch, sizeof(scratch), got)) {
-				return false;
-			}
-			fid_data = scratch;
-			value_len = got;
-		}
-		if (!fid_data || value_len < LMA_FID_OFFSET + sizeof(uint64_t) + sizeof(uint32_t) + sizeof(uint32_t)) {
-			return false;
-		}
-
 		LustreFID fid;
-		memcpy(&fid.f_seq, fid_data + LMA_FID_OFFSET, sizeof(fid.f_seq));
-		memcpy(&fid.f_oid, fid_data + LMA_FID_OFFSET + 8, sizeof(fid.f_oid));
-		memcpy(&fid.f_ver, fid_data + LMA_FID_OFFSET + 12, sizeof(fid.f_ver));
-		if (!fid.IsValid()) {
+		if (!ParseBufferedFID(fid)) {
 			return false;
 		}
 	}
 
-	if (config.skip_no_linkea) {
-		const uint8_t *value_ptr = nullptr;
-		size_t value_len = 0;
-		ext2_ino_t value_inum = 0;
-		if (!FindBufferedXattrValue(TRUSTED_XATTR_INDEX, "link", 4, value_ptr, value_len, value_inum)) {
-			return false;
-		}
-
-		uint8_t scratch[sizeof(LinkEAHeader)];
-		const uint8_t *link_data = value_ptr;
-		if (value_inum != 0) {
-			unsigned int got = 0;
-			if (!ReadExternalXattrPrefix(value_inum, scratch, sizeof(scratch), got)) {
-				return false;
-			}
-			link_data = scratch;
-			value_len = got;
-		}
-		if (!link_data || value_len < sizeof(LinkEAHeader)) {
-			return false;
-		}
-
-		uint32_t magic;
-		uint32_t reccount;
-		memcpy(&magic, link_data, sizeof(magic));
-		memcpy(&reccount, link_data + 4, sizeof(reccount));
-		if (magic != LINK_EA_MAGIC || reccount == 0) {
-			return false;
-		}
+	if (config.skip_no_linkea && !HasBufferedLinkEA()) {
+		return false;
 	}
 
 	return true;
@@ -698,31 +764,13 @@ bool MDTScanner::GetNextInode(LustreInode &out, const MDTScanConfig &config) {
 			return true;
 		}
 
-		// Read Lustre xattrs using ext2fs_xattrs_read_inode to avoid double inode read
-		struct ext2_xattr_handle *h = nullptr;
-		if (!OpenAndReadXattrs(ino, h)) {
-			// No xattrs — apply skip checks and continue
-			if (config.skip_no_fid || config.skip_no_linkea) {
-				continue;
-			}
-			valid_inodes_++;
-			return true;
-		}
-
-		// Parse FID
-		ParseFID(h, out.fid);
-
-		// Lightweight LinkEA check (no full parse)
-		bool has_linkea = HasLinkEA(h);
-
-		// Parse SOM (size on MDS) — overwrites size/blocks if valid
+		bool has_linkea = HasBufferedLinkEA();
+		ParseBufferedFID(out.fid);
 		uint64_t som_size, som_blocks;
-		if (ParseSOM(h, som_size, som_blocks)) {
+		if (ParseBufferedSOM(som_size, som_blocks)) {
 			out.size = som_size;
 			out.blocks = som_blocks;
 		}
-
-		ext2fs_xattrs_close(&h);
 
 		// Apply config-based skip checks
 		if (config.skip_no_fid && !out.fid.IsValid()) {
@@ -785,30 +833,13 @@ bool MDTScanner::GetNextInode(LustreInode &out, const MDTScanConfig &config, ext
 			return true;
 		}
 
-		// Read Lustre xattrs
-		struct ext2_xattr_handle *h = nullptr;
-		if (!OpenAndReadXattrs(ino, h)) {
-			if (config.skip_no_fid || config.skip_no_linkea) {
-				continue;
-			}
-			valid_inodes_++;
-			return true;
-		}
-
-		// Parse FID
-		ParseFID(h, out.fid);
-
-		// Lightweight LinkEA check (no full parse)
-		bool has_linkea = HasLinkEA(h);
-
-		// Parse SOM (size on MDS) — overwrites size/blocks if valid
+		bool has_linkea = HasBufferedLinkEA();
+		ParseBufferedFID(out.fid);
 		uint64_t som_size, som_blocks;
-		if (ParseSOM(h, som_size, som_blocks)) {
+		if (ParseBufferedSOM(som_size, som_blocks)) {
 			out.size = som_size;
 			out.blocks = som_blocks;
 		}
-
-		ext2fs_xattrs_close(&h);
 
 		// Apply config-based skip checks
 		if (config.skip_no_fid && !out.fid.IsValid()) {
@@ -1064,29 +1095,13 @@ bool MDTScanner::ReadInode(ext2_ino_t ino, LustreInode &out, const MDTScanConfig
 		return PassesXattrSkipChecksFast(ino, config);
 	}
 
-	// Read Lustre xattrs
-	struct ext2_xattr_handle *h = nullptr;
-	if (!OpenAndReadXattrs(ino, h)) {
-		if (config.skip_no_fid || config.skip_no_linkea) {
-			return false;
-		}
-		return true;
-	}
-
-	// Parse FID
-	ParseFID(h, out.fid);
-
-	// Lightweight LinkEA check
-	bool has_linkea = HasLinkEA(h);
-
-	// Parse SOM (size on MDS)
+	bool has_linkea = HasBufferedLinkEA();
+	ParseBufferedFID(out.fid);
 	uint64_t som_size, som_blocks;
-	if (ParseSOM(h, som_size, som_blocks)) {
+	if (ParseBufferedSOM(som_size, som_blocks)) {
 		out.size = som_size;
 		out.blocks = som_blocks;
 	}
-
-	ext2fs_xattrs_close(&h);
 
 	// Apply config-based skip checks
 	if (config.skip_no_fid && !out.fid.IsValid()) {
