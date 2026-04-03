@@ -252,13 +252,13 @@ private:
 	//===----------------------------------------------------------------------===//
 
 	//! Get next raw inode from ext2fs scan (skips unused/deleted)
-	bool GetNextRawInode(ext2_ino_t &ino, struct ext2_inode_large &raw);
+	bool GetNextRawInode(ext2_ino_t &ino);
 
 	//! Get next raw inode with upper bound (stops when ino > max_ino)
-	bool GetNextRawInode(ext2_ino_t &ino, struct ext2_inode_large &raw, ext2_ino_t max_ino);
+	bool GetNextRawInode(ext2_ino_t &ino, ext2_ino_t max_ino);
 
 	//! Read a specific inode into the reusable full-size inode buffer
-	bool ReadRawInode(ext2_ino_t ino, struct ext2_inode_large &raw);
+	bool ReadRawInode(ext2_ino_t ino);
 
 	//! Return true when the block group's inode bitmap contains at least one allocated inode
 	bool BlockGroupHasAllocatedInodes(int group) const;

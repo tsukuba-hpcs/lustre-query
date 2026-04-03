@@ -364,7 +364,7 @@ bool MDTScanner::LoadBufferedExternalXattrBlock() {
 	return true;
 }
 
-bool MDTScanner::GetNextRawInode(ext2_ino_t &ino, struct ext2_inode_large &raw) {
+bool MDTScanner::GetNextRawInode(ext2_ino_t &ino) {
 	if (!scan_) {
 		throw IOException("Inode scan not started for '%s'", device_path_);
 	}
@@ -384,18 +384,18 @@ bool MDTScanner::GetNextRawInode(ext2_ino_t &ino, struct ext2_inode_large &raw) 
 			return false;
 		}
 
-		raw = *GetBufferedInode(inode_buffer_);
+		auto *raw = GetBufferedInode(inode_buffer_);
 		buffered_inode_ = ino;
 		InvalidateBufferedXattrState();
 		scanned_inodes_++;
 
 		// Skip unused inodes (all zeros)
-		if (raw.i_mode == 0 && raw.i_links_count == 0) {
+		if (raw->i_mode == 0 && raw->i_links_count == 0) {
 			continue;
 		}
 
 		// Skip deleted inodes
-		if (raw.i_dtime != 0) {
+		if (raw->i_dtime != 0) {
 			continue;
 		}
 
@@ -403,7 +403,7 @@ bool MDTScanner::GetNextRawInode(ext2_ino_t &ino, struct ext2_inode_large &raw) 
 	}
 }
 
-bool MDTScanner::GetNextRawInode(ext2_ino_t &ino, struct ext2_inode_large &raw, ext2_ino_t max_ino) {
+bool MDTScanner::GetNextRawInode(ext2_ino_t &ino, ext2_ino_t max_ino) {
 	if (!scan_) {
 		throw IOException("Inode scan not started for '%s'", device_path_);
 	}
@@ -433,18 +433,18 @@ bool MDTScanner::GetNextRawInode(ext2_ino_t &ino, struct ext2_inode_large &raw, 
 			return false;
 		}
 
-		raw = *GetBufferedInode(inode_buffer_);
+		auto *raw = GetBufferedInode(inode_buffer_);
 		buffered_inode_ = ino;
 		InvalidateBufferedXattrState();
 		scanned_inodes_++;
 
 		// Skip unused inodes (all zeros)
-		if (raw.i_mode == 0 && raw.i_links_count == 0) {
+		if (raw->i_mode == 0 && raw->i_links_count == 0) {
 			continue;
 		}
 
 		// Skip deleted inodes
-		if (raw.i_dtime != 0) {
+		if (raw->i_dtime != 0) {
 			continue;
 		}
 
@@ -452,7 +452,7 @@ bool MDTScanner::GetNextRawInode(ext2_ino_t &ino, struct ext2_inode_large &raw, 
 	}
 }
 
-bool MDTScanner::ReadRawInode(ext2_ino_t ino, struct ext2_inode_large &raw) {
+bool MDTScanner::ReadRawInode(ext2_ino_t ino) {
 	if (!fs_) {
 		throw IOException("Filesystem not open for '%s'", device_path_);
 	}
@@ -464,14 +464,14 @@ bool MDTScanner::ReadRawInode(ext2_ino_t ino, struct ext2_inode_large &raw) {
 		return false;
 	}
 
-	raw = *GetBufferedInode(inode_buffer_);
+	auto *raw = GetBufferedInode(inode_buffer_);
 	buffered_inode_ = ino;
 	InvalidateBufferedXattrState();
 
-	if (raw.i_mode == 0 && raw.i_links_count == 0) {
+	if (raw->i_mode == 0 && raw->i_links_count == 0) {
 		return false;
 	}
-	if (raw.i_dtime != 0) {
+	if (raw->i_dtime != 0) {
 		return false;
 	}
 	return true;
@@ -720,8 +720,7 @@ bool MDTScanner::PassesXattrSkipChecksFast(ext2_ino_t ino, const MDTScanConfig &
 	}
 
 	if (buffered_inode_ != ino) {
-		struct ext2_inode_large raw;
-		if (!ReadRawInode(ino, raw)) {
+		if (!ReadRawInode(ino)) {
 			return false;
 		}
 	}
@@ -746,12 +745,12 @@ bool MDTScanner::PassesXattrSkipChecksFast(ext2_ino_t ino, const MDTScanConfig &
 
 bool MDTScanner::GetNextInode(LustreInode &out, const MDTScanConfig &config) {
 	ext2_ino_t ino;
-	struct ext2_inode_large inode;
 
 	while (true) {
-		if (!GetNextRawInode(ino, inode)) {
+		if (!GetNextRawInode(ino)) {
 			return false;
 		}
+		const auto &inode = *GetBufferedInode(inode_buffer_);
 
 		PopulateInodeMetadata(out, ino, inode);
 
@@ -786,12 +785,12 @@ bool MDTScanner::GetNextInode(LustreInode &out, const MDTScanConfig &config) {
 
 bool MDTScanner::GetNextInode(LustreInode &out, const MDTScanConfig &config, ext2_ino_t max_ino) {
 	ext2_ino_t ino;
-	struct ext2_inode_large inode;
 
 	while (true) {
-		if (!GetNextRawInode(ino, inode, max_ino)) {
+		if (!GetNextRawInode(ino, max_ino)) {
 			return false;
 		}
+		const auto &inode = *GetBufferedInode(inode_buffer_);
 
 		PopulateInodeMetadata(out, ino, inode);
 
@@ -845,10 +844,9 @@ bool MDTScanner::GetNextLink(LustreLink &link, const MDTScanConfig &config) {
 
 	// Scan for the next inode with LinkEA
 	ext2_ino_t ino;
-	struct ext2_inode_large inode;
 
 	while (true) {
-		if (!GetNextRawInode(ino, inode)) {
+		if (!GetNextRawInode(ino)) {
 			return false;
 		}
 
@@ -905,10 +903,9 @@ bool MDTScanner::GetNextLink(LustreLink &link, const MDTScanConfig &config, ext2
 
 	// Scan for the next inode with LinkEA
 	ext2_ino_t ino;
-	struct ext2_inode_large inode;
 
 	while (true) {
-		if (!GetNextRawInode(ino, inode, max_ino)) {
+		if (!GetNextRawInode(ino, max_ino)) {
 			return false;
 		}
 
@@ -995,10 +992,10 @@ bool MDTScanner::ReadInode(ext2_ino_t ino, LustreInode &out, const MDTScanConfig
 	}
 
 	// Read the raw inode
-	struct ext2_inode_large inode;
-	if (!ReadRawInode(ino, inode)) {
+	if (!ReadRawInode(ino)) {
 		return false;
 	}
+	const auto &inode = *GetBufferedInode(inode_buffer_);
 
 	// Convert to LustreInode (same logic as GetNextInode)
 	PopulateInodeMetadata(out, ino, inode);
@@ -1034,10 +1031,10 @@ bool MDTScanner::ReadInodeLinks(ext2_ino_t ino, LustreInode &inode_out, std::vec
 
 	links_out.clear();
 
-	struct ext2_inode_large inode;
-	if (!ReadRawInode(ino, inode)) {
+	if (!ReadRawInode(ino)) {
 		return false;
 	}
+	const auto &inode = *GetBufferedInode(inode_buffer_);
 
 	PopulateInodeMetadata(inode_out, ino, inode);
 
@@ -1067,8 +1064,7 @@ bool MDTScanner::ReadInodeLinkLayouts(ext2_ino_t ino, LustreFID &fid_out, std::v
 	links_out.clear();
 	components_out.clear();
 
-	struct ext2_inode_large inode;
-	if (!ReadRawInode(ino, inode)) {
+	if (!ReadRawInode(ino)) {
 		return false;
 	}
 
@@ -1095,8 +1091,7 @@ bool MDTScanner::ReadInodeLinkObjects(ext2_ino_t ino, LustreFID &fid_out, std::v
 	links_out.clear();
 	objects_out.clear();
 
-	struct ext2_inode_large inode;
-	if (!ReadRawInode(ino, inode)) {
+	if (!ReadRawInode(ino)) {
 		return false;
 	}
 
@@ -1135,30 +1130,15 @@ bool MDTScanner::GetNextInodeLink(LustreInodeLinkRow &row, const MDTScanConfig &
 	}
 
 	ext2_ino_t ino;
-	struct ext2_inode_large inode;
 
 	while (true) {
-		if (!GetNextRawInode(ino, inode)) {
+		if (!GetNextRawInode(ino)) {
 			return false;
 		}
+		const auto &inode = *GetBufferedInode(inode_buffer_);
 
 		LustreInode inode_row;
-		inode_row.ino = ino;
-		inode_row.mode = inode.i_mode;
-		inode_row.nlink = inode.i_links_count;
-		inode_row.uid = inode.i_uid | ((uint32_t)inode.osd2.linux2.l_i_uid_high << 16);
-		inode_row.gid = inode.i_gid | ((uint32_t)inode.osd2.linux2.l_i_gid_high << 16);
-		inode_row.size = inode.i_size;
-		if (ModeToFileType(inode_row.mode) != FileType::DIRECTORY) {
-			inode_row.size |= ((uint64_t)inode.i_size_high << 32);
-		}
-		inode_row.blocks = inode.i_blocks;
-		inode_row.atime = inode.i_atime;
-		inode_row.mtime = inode.i_mtime;
-		inode_row.ctime = inode.i_ctime;
-		inode_row.type = ModeToFileType(inode_row.mode);
-		inode_row.flags = inode.i_flags;
-		inode_row.projid = inode.i_projid;
+		PopulateInodeMetadata(inode_row, ino, inode);
 
 		std::vector<LinkEntry> links;
 		ParseBufferedFID(inode_row.fid);
@@ -1217,30 +1197,15 @@ bool MDTScanner::GetNextInodeLink(LustreInodeLinkRow &row, const MDTScanConfig &
 	}
 
 	ext2_ino_t ino;
-	struct ext2_inode_large inode;
 
 	while (true) {
-		if (!GetNextRawInode(ino, inode, max_ino)) {
+		if (!GetNextRawInode(ino, max_ino)) {
 			return false;
 		}
+		const auto &inode = *GetBufferedInode(inode_buffer_);
 
 		LustreInode inode_row;
-		inode_row.ino = ino;
-		inode_row.mode = inode.i_mode;
-		inode_row.nlink = inode.i_links_count;
-		inode_row.uid = inode.i_uid | ((uint32_t)inode.osd2.linux2.l_i_uid_high << 16);
-		inode_row.gid = inode.i_gid | ((uint32_t)inode.osd2.linux2.l_i_gid_high << 16);
-		inode_row.size = inode.i_size;
-		if (ModeToFileType(inode_row.mode) != FileType::DIRECTORY) {
-			inode_row.size |= ((uint64_t)inode.i_size_high << 32);
-		}
-		inode_row.blocks = inode.i_blocks;
-		inode_row.atime = inode.i_atime;
-		inode_row.mtime = inode.i_mtime;
-		inode_row.ctime = inode.i_ctime;
-		inode_row.type = ModeToFileType(inode_row.mode);
-		inode_row.flags = inode.i_flags;
-		inode_row.projid = inode.i_projid;
+		PopulateInodeMetadata(inode_row, ino, inode);
 
 		std::vector<LinkEntry> links;
 		ParseBufferedFID(inode_row.fid);
@@ -1285,8 +1250,7 @@ bool MDTScanner::GetNextInodeLink(LustreInodeLinkRow &row, const MDTScanConfig &
 bool MDTScanner::ReadInodeLinkEA(ext2_ino_t ino, LustreFID &fid_out, std::vector<LinkEntry> &links_out) {
 	links_out.clear();
 
-	struct ext2_inode_large inode;
-	if (!ReadRawInode(ino, inode)) {
+	if (!ReadRawInode(ino)) {
 		return false;
 	}
 
@@ -1297,8 +1261,7 @@ bool MDTScanner::ReadInodeLayouts(ext2_ino_t ino, LustreFID &fid_out,
                                   std::vector<LustreLayoutComponent> &components) {
 	components.clear();
 
-	struct ext2_inode_large inode;
-	if (!ReadRawInode(ino, inode)) {
+	if (!ReadRawInode(ino)) {
 		return false;
 	}
 
@@ -1315,10 +1278,10 @@ bool MDTScanner::ReadInodeLayouts(ext2_ino_t ino, LustreInode &inode_out,
 
 	components.clear();
 
-	struct ext2_inode_large inode;
-	if (!ReadRawInode(ino, inode)) {
+	if (!ReadRawInode(ino)) {
 		return false;
 	}
+	const auto &inode = *GetBufferedInode(inode_buffer_);
 
 	PopulateInodeMetadata(inode_out, ino, inode);
 
@@ -1351,8 +1314,7 @@ bool MDTScanner::ReadInodeLayoutObjects(ext2_ino_t ino, LustreFID &fid_out,
 	components.clear();
 	objects.clear();
 
-	struct ext2_inode_large inode;
-	if (!ReadRawInode(ino, inode)) {
+	if (!ReadRawInode(ino)) {
 		return false;
 	}
 
@@ -1376,10 +1338,9 @@ bool MDTScanner::ReadInodeLayoutObjects(ext2_ino_t ino, LustreFID &fid_out,
 bool MDTScanner::GetNextInodeLayouts(LustreFID &fid_out, std::vector<LustreLayoutComponent> &components,
                                      const MDTScanConfig &config) {
 	ext2_ino_t ino;
-	struct ext2_inode_large inode;
 
 	while (true) {
-		if (!GetNextRawInode(ino, inode)) {
+		if (!GetNextRawInode(ino)) {
 			return false;
 		}
 
@@ -1402,10 +1363,9 @@ bool MDTScanner::GetNextInodeLinkLayouts(LustreFID &fid_out, std::vector<LinkEnt
                                          std::vector<LustreLayoutComponent> &components_out,
                                          const MDTScanConfig &config) {
 	ext2_ino_t ino;
-	struct ext2_inode_large inode;
 
 	while (true) {
-		if (!GetNextRawInode(ino, inode)) {
+		if (!GetNextRawInode(ino)) {
 			return false;
 		}
 		if (ReadInodeLinkLayouts(ino, fid_out, links_out, components_out, config)) {
@@ -1427,12 +1387,12 @@ bool MDTScanner::GetNextInodeLayout(LustreInodeLayoutRow &row, const MDTScanConf
 	}
 
 	ext2_ino_t ino;
-	struct ext2_inode_large inode;
 
 	while (true) {
-		if (!GetNextRawInode(ino, inode)) {
+		if (!GetNextRawInode(ino)) {
 			return false;
 		}
+		const auto &inode = *GetBufferedInode(inode_buffer_);
 
 		LustreInode inode_row;
 		PopulateInodeMetadata(inode_row, ino, inode);
@@ -1488,12 +1448,12 @@ bool MDTScanner::GetNextInodeLayout(LustreInodeLayoutRow &row, const MDTScanConf
 	}
 
 	ext2_ino_t ino;
-	struct ext2_inode_large inode;
 
 	while (true) {
-		if (!GetNextRawInode(ino, inode, max_ino)) {
+		if (!GetNextRawInode(ino, max_ino)) {
 			return false;
 		}
+		const auto &inode = *GetBufferedInode(inode_buffer_);
 
 		LustreInode inode_row;
 		PopulateInodeMetadata(inode_row, ino, inode);
@@ -1539,10 +1499,9 @@ bool MDTScanner::GetNextInodeLayout(LustreInodeLayoutRow &row, const MDTScanConf
 bool MDTScanner::GetNextInodeLayouts(LustreFID &fid_out, std::vector<LustreLayoutComponent> &components,
                                      const MDTScanConfig &config, ext2_ino_t max_ino) {
 	ext2_ino_t ino;
-	struct ext2_inode_large inode;
 
 	while (true) {
-		if (!GetNextRawInode(ino, inode, max_ino)) {
+		if (!GetNextRawInode(ino, max_ino)) {
 			return false;
 		}
 
@@ -1565,10 +1524,9 @@ bool MDTScanner::GetNextInodeLinkLayouts(LustreFID &fid_out, std::vector<LinkEnt
                                          std::vector<LustreLayoutComponent> &components_out,
                                          const MDTScanConfig &config, ext2_ino_t max_ino) {
 	ext2_ino_t ino;
-	struct ext2_inode_large inode;
 
 	while (true) {
-		if (!GetNextRawInode(ino, inode, max_ino)) {
+		if (!GetNextRawInode(ino, max_ino)) {
 			return false;
 		}
 		if (ReadInodeLinkLayouts(ino, fid_out, links_out, components_out, config)) {
@@ -1580,10 +1538,9 @@ bool MDTScanner::GetNextInodeLinkLayouts(LustreFID &fid_out, std::vector<LinkEnt
 bool MDTScanner::GetNextInodeLayoutObjects(LustreFID &fid_out, std::vector<LustreLayoutComponent> &components,
                                            std::vector<LustreOSTObject> &objects, const MDTScanConfig &config) {
 	ext2_ino_t ino;
-	struct ext2_inode_large inode;
 
 	while (true) {
-		if (!GetNextRawInode(ino, inode)) {
+		if (!GetNextRawInode(ino)) {
 			return false;
 		}
 
@@ -1611,10 +1568,9 @@ bool MDTScanner::GetNextInodeLayoutObjects(LustreFID &fid_out, std::vector<Lustr
                                            std::vector<LustreOSTObject> &objects, const MDTScanConfig &config,
                                            ext2_ino_t max_ino) {
 	ext2_ino_t ino;
-	struct ext2_inode_large inode;
 
 	while (true) {
-		if (!GetNextRawInode(ino, inode, max_ino)) {
+		if (!GetNextRawInode(ino, max_ino)) {
 			return false;
 		}
 
@@ -1642,8 +1598,7 @@ bool MDTScanner::ReadInodeObjects(ext2_ino_t ino, LustreFID &fid_out,
                                   std::vector<LustreOSTObject> &objects) {
 	objects.clear();
 
-	struct ext2_inode_large inode;
-	if (!ReadRawInode(ino, inode)) {
+	if (!ReadRawInode(ino)) {
 		return false;
 	}
 
@@ -1660,10 +1615,10 @@ bool MDTScanner::ReadInodeObjects(ext2_ino_t ino, LustreInode &inode_out,
 
 	objects.clear();
 
-	struct ext2_inode_large inode;
-	if (!ReadRawInode(ino, inode)) {
+	if (!ReadRawInode(ino)) {
 		return false;
 	}
+	const auto &inode = *GetBufferedInode(inode_buffer_);
 
 	PopulateInodeMetadata(inode_out, ino, inode);
 
@@ -1693,10 +1648,9 @@ bool MDTScanner::ReadInodeObjects(ext2_ino_t ino, LustreInode &inode_out,
 bool MDTScanner::GetNextInodeObjects(LustreFID &fid_out, std::vector<LustreOSTObject> &objects,
                                      const MDTScanConfig &config) {
 	ext2_ino_t ino;
-	struct ext2_inode_large inode;
 
 	while (true) {
-		if (!GetNextRawInode(ino, inode)) {
+		if (!GetNextRawInode(ino)) {
 			return false;
 		}
 
@@ -1718,10 +1672,9 @@ bool MDTScanner::GetNextInodeObjects(LustreFID &fid_out, std::vector<LustreOSTOb
 bool MDTScanner::GetNextInodeLinkObjects(LustreFID &fid_out, std::vector<LinkEntry> &links_out,
                                          std::vector<LustreOSTObject> &objects_out, const MDTScanConfig &config) {
 	ext2_ino_t ino;
-	struct ext2_inode_large inode;
 
 	while (true) {
-		if (!GetNextRawInode(ino, inode)) {
+		if (!GetNextRawInode(ino)) {
 			return false;
 		}
 		if (ReadInodeLinkObjects(ino, fid_out, links_out, objects_out, config)) {
@@ -1743,12 +1696,12 @@ bool MDTScanner::GetNextInodeObject(LustreInodeObjectRow &row, const MDTScanConf
 	}
 
 	ext2_ino_t ino;
-	struct ext2_inode_large inode;
 
 	while (true) {
-		if (!GetNextRawInode(ino, inode)) {
+		if (!GetNextRawInode(ino)) {
 			return false;
 		}
+		const auto &inode = *GetBufferedInode(inode_buffer_);
 
 		LustreInode inode_row;
 		PopulateInodeMetadata(inode_row, ino, inode);
@@ -1804,12 +1757,12 @@ bool MDTScanner::GetNextInodeObject(LustreInodeObjectRow &row, const MDTScanConf
 	}
 
 	ext2_ino_t ino;
-	struct ext2_inode_large inode;
 
 	while (true) {
-		if (!GetNextRawInode(ino, inode, max_ino)) {
+		if (!GetNextRawInode(ino, max_ino)) {
 			return false;
 		}
+		const auto &inode = *GetBufferedInode(inode_buffer_);
 
 		LustreInode inode_row;
 		PopulateInodeMetadata(inode_row, ino, inode);
@@ -1855,10 +1808,9 @@ bool MDTScanner::GetNextInodeObject(LustreInodeObjectRow &row, const MDTScanConf
 bool MDTScanner::GetNextInodeObjects(LustreFID &fid_out, std::vector<LustreOSTObject> &objects,
                                      const MDTScanConfig &config, ext2_ino_t max_ino) {
 	ext2_ino_t ino;
-	struct ext2_inode_large inode;
 
 	while (true) {
-		if (!GetNextRawInode(ino, inode, max_ino)) {
+		if (!GetNextRawInode(ino, max_ino)) {
 			return false;
 		}
 
@@ -1881,10 +1833,9 @@ bool MDTScanner::GetNextInodeLinkObjects(LustreFID &fid_out, std::vector<LinkEnt
                                          std::vector<LustreOSTObject> &objects_out, const MDTScanConfig &config,
                                          ext2_ino_t max_ino) {
 	ext2_ino_t ino;
-	struct ext2_inode_large inode;
 
 	while (true) {
-		if (!GetNextRawInode(ino, inode, max_ino)) {
+		if (!GetNextRawInode(ino, max_ino)) {
 			return false;
 		}
 		if (ReadInodeLinkObjects(ino, fid_out, links_out, objects_out, config)) {
@@ -1894,8 +1845,7 @@ bool MDTScanner::GetNextInodeLinkObjects(LustreFID &fid_out, std::vector<LinkEnt
 }
 
 bool MDTScanner::ReadInodeFID(ext2_ino_t ino, LustreFID &fid_out) {
-	struct ext2_inode_large inode;
-	if (!ReadRawInode(ino, inode)) {
+	if (!ReadRawInode(ino)) {
 		return false;
 	}
 
