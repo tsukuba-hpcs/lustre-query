@@ -263,9 +263,6 @@ private:
 	//! Return true when the block group's inode bitmap contains at least one allocated inode
 	bool BlockGroupHasAllocatedInodes(int group) const;
 
-	//! Open xattr handle and read xattrs for an inode
-	bool OpenAndReadXattrs(ext2_ino_t ino, struct ext2_xattr_handle *&h);
-
 	//! Ensure the reusable inode buffer matches the current filesystem's inode size
 	void EnsureInodeBuffer();
 
@@ -288,36 +285,24 @@ private:
 	//! Read a prefix of an external EA inode value into the caller-provided buffer
 	bool ReadExternalXattrPrefix(ext2_ino_t value_ino, void *buf, unsigned int wanted, unsigned int &got);
 
+	//! Read a complete external EA inode value into the reusable scratch buffer
+	bool ReadExternalXattrValue(ext2_ino_t value_ino, const uint8_t *&value_ptr, size_t &value_len);
+
 	//! Read the prefix of a buffered xattr value into a caller-provided scratch buffer when needed
 	bool ReadBufferedXattrPrefix(uint8_t name_index, const char *short_name, size_t short_name_len,
 	                             void *scratch, unsigned int wanted, const uint8_t *&value_ptr, size_t &value_len);
+
+	//! Read the complete buffered xattr value into a reusable scratch buffer when needed
+	bool ReadBufferedXattrValue(uint8_t name_index, const char *short_name, size_t short_name_len,
+	                            const uint8_t *&value_ptr, size_t &value_len);
 
 	//! Direct parsers for lustre_inodes that avoid ext2_xattr_handle allocations
 	bool ParseBufferedFID(LustreFID &fid);
 	bool ParseBufferedSOM(uint64_t &size, uint64_t &blocks);
 	bool HasBufferedLinkEA();
-
-	//===----------------------------------------------------------------------===//
-	// Lustre Extended Attribute Parsing
-	//===----------------------------------------------------------------------===//
-
-	//! Parse FID from trusted.lma xattr
-	bool ParseFID(struct ext2_xattr_handle *xattr_handle, LustreFID &fid);
-
-	//! Parse hard link information from trusted.link xattr (LinkEA)
-	bool ParseLinkEA(struct ext2_xattr_handle *xattr_handle, std::vector<LinkEntry> &links);
-
-	//! Parse LOV (stripe/layout info) from trusted.lov xattr into components and/or objects.
-	//! Either pointer may be nullptr if that output is not needed.
-	bool ParseLOVDetailed(struct ext2_xattr_handle *xattr_handle,
-	                      std::vector<LustreLayoutComponent> *components,
-	                      std::vector<LustreOSTObject> *objects);
-
-	//! Parse SOM (Size on MDS) from trusted.som xattr
-	bool ParseSOM(struct ext2_xattr_handle *xattr_handle, uint64_t &size, uint64_t &blocks);
-
-	//! Lightweight check for LinkEA presence (no full parse)
-	bool HasLinkEA(struct ext2_xattr_handle *xattr_handle);
+	bool ParseBufferedLinkEA(std::vector<LinkEntry> &links);
+	bool ParseBufferedLOVDetailed(std::vector<LustreLayoutComponent> *components,
+	                              std::vector<LustreOSTObject> *objects);
 
 	ext2_filsys fs_;              // Filesystem handle
 	ext2_inode_scan scan_;        // Inode scan handle
@@ -325,6 +310,7 @@ private:
 	struct oi_context *oi_ctx_;   // OI lookup context (separate ext2_filsys handle)
 	std::vector<char> inode_buffer_;
 	std::vector<char> xattr_block_buffer_;
+	std::vector<char> xattr_value_buffer_;
 	ext2_ino_t buffered_inode_ = 0;
 	bool buffered_xattr_block_loaded_ = false;
 	bool buffered_xattr_block_valid_ = false;

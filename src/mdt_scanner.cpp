@@ -9,6 +9,7 @@
 #include "mdt_scanner.hpp"
 
 #include <cstring>
+#include <limits>
 #include <sys/types.h>
 
 namespace duckdb {
@@ -493,31 +494,6 @@ bool MDTScanner::BlockGroupHasAllocatedInodes(int group) const {
 	return free_inodes < inodes_in_group;
 }
 
-bool MDTScanner::OpenAndReadXattrs(ext2_ino_t ino, struct ext2_xattr_handle *&h) {
-	h = nullptr;
-
-	if (buffered_inode_ != ino) {
-		struct ext2_inode_large raw;
-		if (!ReadRawInode(ino, raw)) {
-			return false;
-		}
-	}
-
-	errcode_t err = ext2fs_xattrs_open(fs_, ino, &h);
-	if (err || !h) {
-		return false;
-	}
-
-	err = ext2fs_xattrs_read_inode(h, GetBufferedInode(inode_buffer_));
-	if (err) {
-		ext2fs_xattrs_close(&h);
-		h = nullptr;
-		return false;
-	}
-
-	return true;
-}
-
 bool MDTScanner::FindBufferedXattrValue(uint8_t name_index, const char *short_name, size_t short_name_len,
                                         const uint8_t *&value_ptr, size_t &value_len, ext2_ino_t &value_inum) {
 	value_ptr = nullptr;
@@ -601,6 +577,41 @@ bool MDTScanner::ReadExternalXattrPrefix(ext2_ino_t value_ino, void *buf, unsign
 	return ok;
 }
 
+bool MDTScanner::ReadExternalXattrValue(ext2_ino_t value_ino, const uint8_t *&value_ptr, size_t &value_len) {
+	value_ptr = nullptr;
+	value_len = 0;
+	if (!fs_) {
+		return false;
+	}
+
+	ext2_file_t ea_file;
+	errcode_t err = ext2fs_file_open(fs_, value_ino, 0, &ea_file);
+	if (err) {
+		return false;
+	}
+
+	auto *ea_inode = ext2fs_file_get_inode(ea_file);
+	auto file_size = static_cast<size_t>(ext2fs_file_get_size(ea_file));
+	bool ok = false;
+	if (!(ea_inode->i_flags & EXT4_INLINE_DATA_FL) &&
+	    (ea_inode->i_flags & EXT4_EA_INODE_FL) &&
+	    ea_inode->i_links_count != 0 &&
+	    file_size != 0 &&
+	    file_size <= std::numeric_limits<unsigned int>::max()) {
+		xattr_value_buffer_.resize(file_size);
+		unsigned int got = 0;
+		if (ext2fs_file_read(ea_file, xattr_value_buffer_.data(), static_cast<unsigned int>(file_size), &got) == 0 &&
+		    got == file_size) {
+			value_ptr = reinterpret_cast<const uint8_t *>(xattr_value_buffer_.data());
+			value_len = file_size;
+			ok = true;
+		}
+	}
+
+	ext2fs_file_close(ea_file);
+	return ok;
+}
+
 bool MDTScanner::ReadBufferedXattrPrefix(uint8_t name_index, const char *short_name, size_t short_name_len,
                                          void *scratch, unsigned int wanted, const uint8_t *&value_ptr,
                                          size_t &value_len) {
@@ -625,6 +636,20 @@ bool MDTScanner::ReadBufferedXattrPrefix(uint8_t name_index, const char *short_n
 	value_ptr = static_cast<const uint8_t *>(scratch);
 	value_len = got;
 	return true;
+}
+
+bool MDTScanner::ReadBufferedXattrValue(uint8_t name_index, const char *short_name, size_t short_name_len,
+                                        const uint8_t *&value_ptr, size_t &value_len) {
+	ext2_ino_t value_inum = 0;
+	if (!FindBufferedXattrValue(name_index, short_name, short_name_len, value_ptr, value_len, value_inum)) {
+		return false;
+	}
+
+	if (value_inum == 0) {
+		return value_ptr != nullptr && value_len != 0;
+	}
+
+	return ReadExternalXattrValue(value_inum, value_ptr, value_len);
 }
 
 bool MDTScanner::ParseBufferedFID(LustreFID &fid) {
@@ -882,25 +907,10 @@ bool MDTScanner::GetNextLink(LustreLink &link, const MDTScanConfig &config) {
 			return false;
 		}
 
-		// Read Lustre xattrs
-		struct ext2_xattr_handle *h = nullptr;
-		if (!OpenAndReadXattrs(ino, h)) {
-			if (config.skip_no_fid || config.skip_no_linkea) {
-				continue;
-			}
-			valid_inodes_++;
-			continue;
-		}
-
-		// Parse FID
 		LustreFID fid;
-		ParseFID(h, fid);
-
-		// Full LinkEA parse (need actual link entries)
 		std::vector<LinkEntry> links;
-		bool has_linkea = ParseLinkEA(h, links);
-
-		ext2fs_xattrs_close(&h);
+		ParseBufferedFID(fid);
+		bool has_linkea = ParseBufferedLinkEA(links);
 
 		// Apply config-based skip checks
 		if (config.skip_no_fid && !fid.IsValid()) {
@@ -957,25 +967,10 @@ bool MDTScanner::GetNextLink(LustreLink &link, const MDTScanConfig &config, ext2
 			return false;
 		}
 
-		// Read Lustre xattrs
-		struct ext2_xattr_handle *h = nullptr;
-		if (!OpenAndReadXattrs(ino, h)) {
-			if (config.skip_no_fid || config.skip_no_linkea) {
-				continue;
-			}
-			valid_inodes_++;
-			continue;
-		}
-
-		// Parse FID
 		LustreFID fid;
-		ParseFID(h, fid);
-
-		// Full LinkEA parse (need actual link entries)
 		std::vector<LinkEntry> links;
-		bool has_linkea = ParseLinkEA(h, links);
-
-		ext2fs_xattrs_close(&h);
+		ParseBufferedFID(fid);
+		bool has_linkea = ParseBufferedLinkEA(links);
 
 		// Apply config-based skip checks
 		if (config.skip_no_fid && !fid.IsValid()) {
@@ -1145,21 +1140,15 @@ bool MDTScanner::ReadInodeLinks(ext2_ino_t ino, LustreInode &inode_out, std::vec
 	inode_out.flags = inode.i_flags;
 	inode_out.projid = inode.i_projid;
 
-	struct ext2_xattr_handle *h = nullptr;
-	if (!OpenAndReadXattrs(ino, h)) {
-		return false;
-	}
+	ParseBufferedFID(inode_out.fid);
+	ParseBufferedLinkEA(links_out);
 
-	ParseFID(h, inode_out.fid);
-	ParseLinkEA(h, links_out);
-
-	uint64_t som_size, som_blocks;
-	if (ParseSOM(h, som_size, som_blocks)) {
+	uint64_t som_size = 0;
+	uint64_t som_blocks = 0;
+	if (ParseBufferedSOM(som_size, som_blocks)) {
 		inode_out.size = som_size;
 		inode_out.blocks = som_blocks;
 	}
-
-	ext2fs_xattrs_close(&h);
 
 	if (config.skip_no_fid && !inode_out.fid.IsValid()) {
 		return false;
@@ -1177,17 +1166,15 @@ bool MDTScanner::ReadInodeLinkLayouts(ext2_ino_t ino, LustreFID &fid_out, std::v
 	links_out.clear();
 	components_out.clear();
 
-	struct ext2_xattr_handle *h = nullptr;
-	if (!OpenAndReadXattrs(ino, h)) {
+	struct ext2_inode_large inode;
+	if (!ReadRawInode(ino, inode)) {
 		return false;
 	}
 
 	fid_out = LustreFID();
-	ParseFID(h, fid_out);
-	ParseLinkEA(h, links_out);
-	ParseLOVDetailed(h, &components_out, nullptr);
-
-	ext2fs_xattrs_close(&h);
+	ParseBufferedFID(fid_out);
+	ParseBufferedLinkEA(links_out);
+	ParseBufferedLOVDetailed(&components_out, nullptr);
 
 	if (config.skip_no_fid && !fid_out.IsValid()) {
 		return false;
@@ -1207,17 +1194,15 @@ bool MDTScanner::ReadInodeLinkObjects(ext2_ino_t ino, LustreFID &fid_out, std::v
 	links_out.clear();
 	objects_out.clear();
 
-	struct ext2_xattr_handle *h = nullptr;
-	if (!OpenAndReadXattrs(ino, h)) {
+	struct ext2_inode_large inode;
+	if (!ReadRawInode(ino, inode)) {
 		return false;
 	}
 
 	fid_out = LustreFID();
-	ParseFID(h, fid_out);
-	ParseLinkEA(h, links_out);
-	ParseLOVDetailed(h, nullptr, &objects_out);
-
-	ext2fs_xattrs_close(&h);
+	ParseBufferedFID(fid_out);
+	ParseBufferedLinkEA(links_out);
+	ParseBufferedLOVDetailed(nullptr, &objects_out);
 
 	if (config.skip_no_fid && !fid_out.IsValid()) {
 		return false;
@@ -1274,23 +1259,16 @@ bool MDTScanner::GetNextInodeLink(LustreInodeLinkRow &row, const MDTScanConfig &
 		inode_row.flags = inode.i_flags;
 		inode_row.projid = inode.i_projid;
 
-		struct ext2_xattr_handle *h = nullptr;
-		if (!OpenAndReadXattrs(ino, h)) {
-			continue;
-		}
-
-		ParseFID(h, inode_row.fid);
-
 		std::vector<LinkEntry> links;
-		ParseLinkEA(h, links);
+		ParseBufferedFID(inode_row.fid);
+		ParseBufferedLinkEA(links);
 
-		uint64_t som_size, som_blocks;
-		if (ParseSOM(h, som_size, som_blocks)) {
+		uint64_t som_size = 0;
+		uint64_t som_blocks = 0;
+		if (ParseBufferedSOM(som_size, som_blocks)) {
 			inode_row.size = som_size;
 			inode_row.blocks = som_blocks;
 		}
-
-		ext2fs_xattrs_close(&h);
 
 		// Inner join on fid only matches rows with a valid FID and at least one link entry.
 		if (!inode_row.fid.IsValid() || links.empty()) {
@@ -1363,23 +1341,16 @@ bool MDTScanner::GetNextInodeLink(LustreInodeLinkRow &row, const MDTScanConfig &
 		inode_row.flags = inode.i_flags;
 		inode_row.projid = inode.i_projid;
 
-		struct ext2_xattr_handle *h = nullptr;
-		if (!OpenAndReadXattrs(ino, h)) {
-			continue;
-		}
-
-		ParseFID(h, inode_row.fid);
-
 		std::vector<LinkEntry> links;
-		ParseLinkEA(h, links);
+		ParseBufferedFID(inode_row.fid);
+		ParseBufferedLinkEA(links);
 
-		uint64_t som_size, som_blocks;
-		if (ParseSOM(h, som_size, som_blocks)) {
+		uint64_t som_size = 0;
+		uint64_t som_blocks = 0;
+		if (ParseBufferedSOM(som_size, som_blocks)) {
 			inode_row.size = som_size;
 			inode_row.blocks = som_blocks;
 		}
-
-		ext2fs_xattrs_close(&h);
 
 		// Inner join on fid only matches rows with a valid FID and at least one link entry.
 		if (!inode_row.fid.IsValid() || links.empty()) {
@@ -1413,31 +1384,25 @@ bool MDTScanner::GetNextInodeLink(LustreInodeLinkRow &row, const MDTScanConfig &
 bool MDTScanner::ReadInodeLinkEA(ext2_ino_t ino, LustreFID &fid_out, std::vector<LinkEntry> &links_out) {
 	links_out.clear();
 
-	struct ext2_xattr_handle *h = nullptr;
-	if (!OpenAndReadXattrs(ino, h)) {
+	struct ext2_inode_large inode;
+	if (!ReadRawInode(ino, inode)) {
 		return false;
 	}
 
-	bool has_fid = ParseFID(h, fid_out);
-	ParseLinkEA(h, links_out);
-
-	ext2fs_xattrs_close(&h);
-	return has_fid;
+	return ParseBufferedFID(fid_out) && ParseBufferedLinkEA(links_out);
 }
 
 bool MDTScanner::ReadInodeLayouts(ext2_ino_t ino, LustreFID &fid_out,
                                   std::vector<LustreLayoutComponent> &components) {
 	components.clear();
 
-	struct ext2_xattr_handle *h = nullptr;
-	if (!OpenAndReadXattrs(ino, h)) {
+	struct ext2_inode_large inode;
+	if (!ReadRawInode(ino, inode)) {
 		return false;
 	}
 
-	bool has_fid = ParseFID(h, fid_out);
-	ParseLOVDetailed(h, &components, nullptr);
-
-	ext2fs_xattrs_close(&h);
+	bool has_fid = ParseBufferedFID(fid_out);
+	ParseBufferedLOVDetailed(&components, nullptr);
 	return has_fid;
 }
 
@@ -1456,22 +1421,16 @@ bool MDTScanner::ReadInodeLayouts(ext2_ino_t ino, LustreInode &inode_out,
 
 	PopulateInodeMetadata(inode_out, ino, inode);
 
-	struct ext2_xattr_handle *h = nullptr;
-	if (!OpenAndReadXattrs(ino, h)) {
-		return false;
-	}
+	ParseBufferedFID(inode_out.fid);
+	bool has_linkea = HasBufferedLinkEA();
+	ParseBufferedLOVDetailed(&components, nullptr);
 
-	ParseFID(h, inode_out.fid);
-	bool has_linkea = HasLinkEA(h);
-	ParseLOVDetailed(h, &components, nullptr);
-
-	uint64_t som_size, som_blocks;
-	if (ParseSOM(h, som_size, som_blocks)) {
+	uint64_t som_size = 0;
+	uint64_t som_blocks = 0;
+	if (ParseBufferedSOM(som_size, som_blocks)) {
 		inode_out.size = som_size;
 		inode_out.blocks = som_blocks;
 	}
-
-	ext2fs_xattrs_close(&h);
 
 	if (config.skip_no_fid && !inode_out.fid.IsValid()) {
 		return false;
@@ -1491,16 +1450,15 @@ bool MDTScanner::ReadInodeLayoutObjects(ext2_ino_t ino, LustreFID &fid_out,
 	components.clear();
 	objects.clear();
 
-	struct ext2_xattr_handle *h = nullptr;
-	if (!OpenAndReadXattrs(ino, h)) {
+	struct ext2_inode_large inode;
+	if (!ReadRawInode(ino, inode)) {
 		return false;
 	}
 
 	fid_out = LustreFID();
-	ParseFID(h, fid_out);
-	bool has_linkea = HasLinkEA(h);
-	ParseLOVDetailed(h, &components, &objects);
-	ext2fs_xattrs_close(&h);
+	ParseBufferedFID(fid_out);
+	bool has_linkea = HasBufferedLinkEA();
+	ParseBufferedLOVDetailed(&components, &objects);
 
 	if (config.skip_no_fid && !fid_out.IsValid()) {
 		return false;
@@ -1524,19 +1482,10 @@ bool MDTScanner::GetNextInodeLayouts(LustreFID &fid_out, std::vector<LustreLayou
 			return false;
 		}
 
-		struct ext2_xattr_handle *h = nullptr;
-		if (!OpenAndReadXattrs(ino, h)) {
-			if (config.skip_no_fid) {
-				continue;
-			}
-			continue;
-		}
-
 		fid_out = LustreFID();
 		components.clear();
-		ParseFID(h, fid_out);
-		ParseLOVDetailed(h, &components, nullptr);
-		ext2fs_xattrs_close(&h);
+		ParseBufferedFID(fid_out);
+		ParseBufferedLOVDetailed(&components, nullptr);
 
 		if (config.skip_no_fid && !fid_out.IsValid()) {
 			continue;
@@ -1587,23 +1536,17 @@ bool MDTScanner::GetNextInodeLayout(LustreInodeLayoutRow &row, const MDTScanConf
 		LustreInode inode_row;
 		PopulateInodeMetadata(inode_row, ino, inode);
 
-		struct ext2_xattr_handle *h = nullptr;
-		if (!OpenAndReadXattrs(ino, h)) {
-			continue;
-		}
-
-		ParseFID(h, inode_row.fid);
-		bool has_linkea = HasLinkEA(h);
 		std::vector<LustreLayoutComponent> components;
-		ParseLOVDetailed(h, &components, nullptr);
+		ParseBufferedFID(inode_row.fid);
+		bool has_linkea = HasBufferedLinkEA();
+		ParseBufferedLOVDetailed(&components, nullptr);
 
-		uint64_t som_size, som_blocks;
-		if (ParseSOM(h, som_size, som_blocks)) {
+		uint64_t som_size = 0;
+		uint64_t som_blocks = 0;
+		if (ParseBufferedSOM(som_size, som_blocks)) {
 			inode_row.size = som_size;
 			inode_row.blocks = som_blocks;
 		}
-
-		ext2fs_xattrs_close(&h);
 
 		if (!inode_row.fid.IsValid() || components.empty()) {
 			continue;
@@ -1654,23 +1597,17 @@ bool MDTScanner::GetNextInodeLayout(LustreInodeLayoutRow &row, const MDTScanConf
 		LustreInode inode_row;
 		PopulateInodeMetadata(inode_row, ino, inode);
 
-		struct ext2_xattr_handle *h = nullptr;
-		if (!OpenAndReadXattrs(ino, h)) {
-			continue;
-		}
-
-		ParseFID(h, inode_row.fid);
-		bool has_linkea = HasLinkEA(h);
 		std::vector<LustreLayoutComponent> components;
-		ParseLOVDetailed(h, &components, nullptr);
+		ParseBufferedFID(inode_row.fid);
+		bool has_linkea = HasBufferedLinkEA();
+		ParseBufferedLOVDetailed(&components, nullptr);
 
-		uint64_t som_size, som_blocks;
-		if (ParseSOM(h, som_size, som_blocks)) {
+		uint64_t som_size = 0;
+		uint64_t som_blocks = 0;
+		if (ParseBufferedSOM(som_size, som_blocks)) {
 			inode_row.size = som_size;
 			inode_row.blocks = som_blocks;
 		}
-
-		ext2fs_xattrs_close(&h);
 
 		if (!inode_row.fid.IsValid() || components.empty()) {
 			continue;
@@ -1708,19 +1645,10 @@ bool MDTScanner::GetNextInodeLayouts(LustreFID &fid_out, std::vector<LustreLayou
 			return false;
 		}
 
-		struct ext2_xattr_handle *h = nullptr;
-		if (!OpenAndReadXattrs(ino, h)) {
-			if (config.skip_no_fid) {
-				continue;
-			}
-			continue;
-		}
-
 		fid_out = LustreFID();
 		components.clear();
-		ParseFID(h, fid_out);
-		ParseLOVDetailed(h, &components, nullptr);
-		ext2fs_xattrs_close(&h);
+		ParseBufferedFID(fid_out);
+		ParseBufferedLOVDetailed(&components, nullptr);
 
 		if (config.skip_no_fid && !fid_out.IsValid()) {
 			continue;
@@ -1758,18 +1686,12 @@ bool MDTScanner::GetNextInodeLayoutObjects(LustreFID &fid_out, std::vector<Lustr
 			return false;
 		}
 
-		struct ext2_xattr_handle *h = nullptr;
-		if (!OpenAndReadXattrs(ino, h)) {
-			continue;
-		}
-
 		fid_out = LustreFID();
 		components.clear();
 		objects.clear();
-		ParseFID(h, fid_out);
-		bool has_linkea = HasLinkEA(h);
-		ParseLOVDetailed(h, &components, &objects);
-		ext2fs_xattrs_close(&h);
+		ParseBufferedFID(fid_out);
+		bool has_linkea = HasBufferedLinkEA();
+		ParseBufferedLOVDetailed(&components, &objects);
 
 		if (config.skip_no_fid && !fid_out.IsValid()) {
 			continue;
@@ -1795,18 +1717,12 @@ bool MDTScanner::GetNextInodeLayoutObjects(LustreFID &fid_out, std::vector<Lustr
 			return false;
 		}
 
-		struct ext2_xattr_handle *h = nullptr;
-		if (!OpenAndReadXattrs(ino, h)) {
-			continue;
-		}
-
 		fid_out = LustreFID();
 		components.clear();
 		objects.clear();
-		ParseFID(h, fid_out);
-		bool has_linkea = HasLinkEA(h);
-		ParseLOVDetailed(h, &components, &objects);
-		ext2fs_xattrs_close(&h);
+		ParseBufferedFID(fid_out);
+		bool has_linkea = HasBufferedLinkEA();
+		ParseBufferedLOVDetailed(&components, &objects);
 
 		if (config.skip_no_fid && !fid_out.IsValid()) {
 			continue;
@@ -1825,15 +1741,13 @@ bool MDTScanner::ReadInodeObjects(ext2_ino_t ino, LustreFID &fid_out,
                                   std::vector<LustreOSTObject> &objects) {
 	objects.clear();
 
-	struct ext2_xattr_handle *h = nullptr;
-	if (!OpenAndReadXattrs(ino, h)) {
+	struct ext2_inode_large inode;
+	if (!ReadRawInode(ino, inode)) {
 		return false;
 	}
 
-	bool has_fid = ParseFID(h, fid_out);
-	ParseLOVDetailed(h, nullptr, &objects);
-
-	ext2fs_xattrs_close(&h);
+	bool has_fid = ParseBufferedFID(fid_out);
+	ParseBufferedLOVDetailed(nullptr, &objects);
 	return has_fid;
 }
 
@@ -1852,22 +1766,16 @@ bool MDTScanner::ReadInodeObjects(ext2_ino_t ino, LustreInode &inode_out,
 
 	PopulateInodeMetadata(inode_out, ino, inode);
 
-	struct ext2_xattr_handle *h = nullptr;
-	if (!OpenAndReadXattrs(ino, h)) {
-		return false;
-	}
+	ParseBufferedFID(inode_out.fid);
+	bool has_linkea = HasBufferedLinkEA();
+	ParseBufferedLOVDetailed(nullptr, &objects);
 
-	ParseFID(h, inode_out.fid);
-	bool has_linkea = HasLinkEA(h);
-	ParseLOVDetailed(h, nullptr, &objects);
-
-	uint64_t som_size, som_blocks;
-	if (ParseSOM(h, som_size, som_blocks)) {
+	uint64_t som_size = 0;
+	uint64_t som_blocks = 0;
+	if (ParseBufferedSOM(som_size, som_blocks)) {
 		inode_out.size = som_size;
 		inode_out.blocks = som_blocks;
 	}
-
-	ext2fs_xattrs_close(&h);
 
 	if (config.skip_no_fid && !inode_out.fid.IsValid()) {
 		return false;
@@ -1891,19 +1799,10 @@ bool MDTScanner::GetNextInodeObjects(LustreFID &fid_out, std::vector<LustreOSTOb
 			return false;
 		}
 
-		struct ext2_xattr_handle *h = nullptr;
-		if (!OpenAndReadXattrs(ino, h)) {
-			if (config.skip_no_fid) {
-				continue;
-			}
-			continue;
-		}
-
 		fid_out = LustreFID();
 		objects.clear();
-		ParseFID(h, fid_out);
-		ParseLOVDetailed(h, nullptr, &objects);
-		ext2fs_xattrs_close(&h);
+		ParseBufferedFID(fid_out);
+		ParseBufferedLOVDetailed(nullptr, &objects);
 
 		if (config.skip_no_fid && !fid_out.IsValid()) {
 			continue;
@@ -1953,23 +1852,17 @@ bool MDTScanner::GetNextInodeObject(LustreInodeObjectRow &row, const MDTScanConf
 		LustreInode inode_row;
 		PopulateInodeMetadata(inode_row, ino, inode);
 
-		struct ext2_xattr_handle *h = nullptr;
-		if (!OpenAndReadXattrs(ino, h)) {
-			continue;
-		}
-
-		ParseFID(h, inode_row.fid);
-		bool has_linkea = HasLinkEA(h);
 		std::vector<LustreOSTObject> objects;
-		ParseLOVDetailed(h, nullptr, &objects);
+		ParseBufferedFID(inode_row.fid);
+		bool has_linkea = HasBufferedLinkEA();
+		ParseBufferedLOVDetailed(nullptr, &objects);
 
-		uint64_t som_size, som_blocks;
-		if (ParseSOM(h, som_size, som_blocks)) {
+		uint64_t som_size = 0;
+		uint64_t som_blocks = 0;
+		if (ParseBufferedSOM(som_size, som_blocks)) {
 			inode_row.size = som_size;
 			inode_row.blocks = som_blocks;
 		}
-
-		ext2fs_xattrs_close(&h);
 
 		if (!inode_row.fid.IsValid() || objects.empty()) {
 			continue;
@@ -2020,23 +1913,17 @@ bool MDTScanner::GetNextInodeObject(LustreInodeObjectRow &row, const MDTScanConf
 		LustreInode inode_row;
 		PopulateInodeMetadata(inode_row, ino, inode);
 
-		struct ext2_xattr_handle *h = nullptr;
-		if (!OpenAndReadXattrs(ino, h)) {
-			continue;
-		}
-
-		ParseFID(h, inode_row.fid);
-		bool has_linkea = HasLinkEA(h);
 		std::vector<LustreOSTObject> objects;
-		ParseLOVDetailed(h, nullptr, &objects);
+		ParseBufferedFID(inode_row.fid);
+		bool has_linkea = HasBufferedLinkEA();
+		ParseBufferedLOVDetailed(nullptr, &objects);
 
-		uint64_t som_size, som_blocks;
-		if (ParseSOM(h, som_size, som_blocks)) {
+		uint64_t som_size = 0;
+		uint64_t som_blocks = 0;
+		if (ParseBufferedSOM(som_size, som_blocks)) {
 			inode_row.size = som_size;
 			inode_row.blocks = som_blocks;
 		}
-
-		ext2fs_xattrs_close(&h);
 
 		if (!inode_row.fid.IsValid() || objects.empty()) {
 			continue;
@@ -2074,19 +1961,10 @@ bool MDTScanner::GetNextInodeObjects(LustreFID &fid_out, std::vector<LustreOSTOb
 			return false;
 		}
 
-		struct ext2_xattr_handle *h = nullptr;
-		if (!OpenAndReadXattrs(ino, h)) {
-			if (config.skip_no_fid) {
-				continue;
-			}
-			continue;
-		}
-
 		fid_out = LustreFID();
 		objects.clear();
-		ParseFID(h, fid_out);
-		ParseLOVDetailed(h, nullptr, &objects);
-		ext2fs_xattrs_close(&h);
+		ParseBufferedFID(fid_out);
+		ParseBufferedLOVDetailed(nullptr, &objects);
 
 		if (config.skip_no_fid && !fid_out.IsValid()) {
 			continue;
@@ -2115,14 +1993,12 @@ bool MDTScanner::GetNextInodeLinkObjects(LustreFID &fid_out, std::vector<LinkEnt
 }
 
 bool MDTScanner::ReadInodeFID(ext2_ino_t ino, LustreFID &fid_out) {
-	struct ext2_xattr_handle *h = nullptr;
-	if (!OpenAndReadXattrs(ino, h)) {
+	struct ext2_inode_large inode;
+	if (!ReadRawInode(ino, inode)) {
 		return false;
 	}
 
-	bool has_fid = ParseFID(h, fid_out);
-	ext2fs_xattrs_close(&h);
-	return has_fid;
+	return ParseBufferedFID(fid_out);
 }
 
 struct DirIterateCallbackData {
@@ -2184,40 +2060,12 @@ bool MDTScanner::LookupName(ext2_ino_t dir_ino, const std::string &name, ext2_in
 // Lustre Extended Attribute Parsing
 //===----------------------------------------------------------------------===//
 
-bool MDTScanner::ParseFID(struct ext2_xattr_handle *xattr_handle, LustreFID &fid) {
-	void *value = nullptr;
-	size_t value_len = 0;
-	errcode_t err = ext2fs_xattr_get(xattr_handle, xattr::LMA, &value, &value_len);
-	if (err || !value || value_len < sizeof(LustreLMA)) {
-		return false;
-	}
-
-	// Parse LMA structure
-	const uint8_t *data = static_cast<const uint8_t *>(value);
-
-	// Skip lma_compat and lma_incompat
-	const uint8_t *fid_data = data + LMA_FID_OFFSET;
-
-	// Read FID fields (little-endian on x86)
-	memcpy(&fid.f_seq, fid_data, sizeof(fid.f_seq));
-	memcpy(&fid.f_oid, fid_data + 8, sizeof(fid.f_oid));
-	memcpy(&fid.f_ver, fid_data + 12, sizeof(fid.f_ver));
-
-	ext2fs_free_mem(&value);
-	return true;
-}
-
-bool MDTScanner::ParseLinkEA(struct ext2_xattr_handle *xattr_handle, std::vector<LinkEntry> &links) {
+static bool ParseLinkEAValue(const uint8_t *data, size_t value_len, std::vector<LinkEntry> &links) {
 	links.clear();
-
-	void *value = nullptr;
-	size_t value_len = 0;
-	errcode_t err = ext2fs_xattr_get(xattr_handle, xattr::LINK, &value, &value_len);
-	if (err || !value || value_len < sizeof(LinkEAHeader)) {
+	if (!data || value_len < sizeof(LinkEAHeader)) {
 		return false;
 	}
 
-	const uint8_t *data = static_cast<const uint8_t *>(value);
 	const uint8_t *end = data + value_len;
 
 	// Parse LinkEA header
@@ -2228,7 +2076,6 @@ bool MDTScanner::ParseLinkEA(struct ext2_xattr_handle *xattr_handle, std::vector
 
 	// Verify magic
 	if (header.leh_magic != LINK_EA_MAGIC) {
-		ext2fs_free_mem(&value);
 		return false;
 	}
 
@@ -2264,8 +2111,17 @@ bool MDTScanner::ParseLinkEA(struct ext2_xattr_handle *xattr_handle, std::vector
 		entry_ptr += reclen;
 	}
 
-	ext2fs_free_mem(&value);
 	return !links.empty();
+}
+
+bool MDTScanner::ParseBufferedLinkEA(std::vector<LinkEntry> &links) {
+	const uint8_t *value_ptr = nullptr;
+	size_t value_len = 0;
+	if (!ReadBufferedXattrValue(TRUSTED_XATTR_INDEX, "link", 4, value_ptr, value_len)) {
+		links.clear();
+		return false;
+	}
+	return ParseLinkEAValue(value_ptr, value_len, links);
 }
 
 //===----------------------------------------------------------------------===//
@@ -2411,22 +2267,16 @@ static bool ParseV1V3Blob(const uint8_t *data, size_t data_len,
 static constexpr size_t COMP_V1_HEADER_SIZE = 32;
 static constexpr size_t COMP_ENTRY_SIZE = 48;
 
-bool MDTScanner::ParseLOVDetailed(struct ext2_xattr_handle *xattr_handle,
-                                  std::vector<LustreLayoutComponent> *components,
-                                  std::vector<LustreOSTObject> *objects) {
-	void *value = nullptr;
-	size_t value_len = 0;
-	errcode_t err = ext2fs_xattr_get(xattr_handle, xattr::LOV, &value, &value_len);
-	if (err || !value) {
+static bool ParseLOVValue(const uint8_t *data, size_t value_len,
+                         std::vector<LustreLayoutComponent> *components,
+                         std::vector<LustreOSTObject> *objects) {
+	if (!data) {
 		return false;
 	}
 
 	if (value_len < 4) {
-		ext2fs_free_mem(&value);
 		return false;
 	}
-
-	const uint8_t *data = static_cast<const uint8_t *>(value);
 
 	uint32_t magic;
 	memcpy(&magic, data, sizeof(magic));
@@ -2445,7 +2295,6 @@ bool MDTScanner::ParseLOVDetailed(struct ext2_xattr_handle *xattr_handle,
 	} else if (magic == LOV_MAGIC_COMP_V1) {
 		// Composite layout (PFL, FLR, EC)
 		if (value_len < COMP_V1_HEADER_SIZE) {
-			ext2fs_free_mem(&value);
 			return false;
 		}
 
@@ -2455,7 +2304,6 @@ bool MDTScanner::ParseLOVDetailed(struct ext2_xattr_handle *xattr_handle,
 		// Validate that all entries fit within the header area
 		size_t entries_end = COMP_V1_HEADER_SIZE + static_cast<size_t>(entry_count) * COMP_ENTRY_SIZE;
 		if (entries_end > value_len) {
-			ext2fs_free_mem(&value);
 			return false;
 		}
 
@@ -2502,55 +2350,23 @@ bool MDTScanner::ParseLOVDetailed(struct ext2_xattr_handle *xattr_handle,
 	}
 	// Other magic values (LOV_MAGIC_FOREIGN, etc.) are silently skipped
 
-	ext2fs_free_mem(&value);
 	return result;
 }
 
-bool MDTScanner::ParseSOM(struct ext2_xattr_handle *xattr_handle, uint64_t &size, uint64_t &blocks) {
-	void *value = nullptr;
+bool MDTScanner::ParseBufferedLOVDetailed(std::vector<LustreLayoutComponent> *components,
+                                          std::vector<LustreOSTObject> *objects) {
+	const uint8_t *value_ptr = nullptr;
 	size_t value_len = 0;
-	errcode_t err = ext2fs_xattr_get(xattr_handle, xattr::SOM, &value, &value_len);
-	if (err || !value || value_len < sizeof(LustreSOM)) {
+	if (!ReadBufferedXattrValue(TRUSTED_XATTR_INDEX, "lov", 3, value_ptr, value_len)) {
+		if (components) {
+			components->clear();
+		}
+		if (objects) {
+			objects->clear();
+		}
 		return false;
 	}
-
-	// Parse SOM structure (little-endian on x86)
-	const uint8_t *data = static_cast<const uint8_t *>(value);
-	uint16_t lsa_valid;
-	memcpy(&lsa_valid, data, sizeof(lsa_valid));
-
-	// Check if SOM is valid (lsa_valid should be non-zero)
-	if (lsa_valid == 0) {
-		ext2fs_free_mem(&value);
-		return false;
-	}
-
-	// Read size and blocks (offset: 2 + 6 = 8 bytes for lsa_valid + reserved)
-	memcpy(&size, data + 8, sizeof(size));
-	memcpy(&blocks, data + 16, sizeof(blocks));
-
-	ext2fs_free_mem(&value);
-	return true;
-}
-
-bool MDTScanner::HasLinkEA(struct ext2_xattr_handle *xattr_handle) {
-	void *value = nullptr;
-	size_t value_len = 0;
-	errcode_t err = ext2fs_xattr_get(xattr_handle, xattr::LINK, &value, &value_len);
-	if (err || !value || value_len < sizeof(LinkEAHeader)) {
-		return false;
-	}
-
-	// Only check magic and reccount — no full entry parsing
-	const uint8_t *data = static_cast<const uint8_t *>(value);
-	uint32_t magic;
-	uint32_t reccount;
-	memcpy(&magic, data, sizeof(magic));
-	memcpy(&reccount, data + 4, sizeof(reccount));
-
-	ext2fs_free_mem(&value);
-
-	return magic == LINK_EA_MAGIC && reccount > 0;
+	return ParseLOVValue(value_ptr, value_len, components, objects);
 }
 
 } // namespace lustre
