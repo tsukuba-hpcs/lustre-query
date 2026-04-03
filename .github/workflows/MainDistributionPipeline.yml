@@ -18,7 +18,9 @@ jobs:
     with:
       duckdb_version: v1.5.1
       ci_tools_version: v1.5.1
-      extension_name: quack
+      extension_name: lustre_query
+      exclude_archs: 'osx_amd64;osx_arm64;windows_amd64;windows_arm64;wasm_mvp;wasm_eh;wasm_threads;linux_amd64_musl;linux_arm64_musl'
+      extra_toolchains: 'e2fsprogs'
 
   code-quality-check:
     name: Code Quality Check
@@ -26,5 +28,5 @@ jobs:
     with:
       duckdb_version: v1.5.1
       ci_tools_version: v1.5.1
-      extension_name: quack
+      extension_name: lustre_query
       format_checks: 'format;tidy'
