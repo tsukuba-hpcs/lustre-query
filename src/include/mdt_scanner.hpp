@@ -255,11 +255,17 @@ private:
 	//! Get next raw inode with upper bound (stops when ino > max_ino)
 	bool GetNextRawInode(ext2_ino_t &ino, struct ext2_inode_large &raw, ext2_ino_t max_ino);
 
+	//! Read a specific inode into the reusable full-size inode buffer
+	bool ReadRawInode(ext2_ino_t ino, struct ext2_inode_large &raw);
+
 	//! Return true when the block group's inode bitmap contains at least one allocated inode
 	bool BlockGroupHasAllocatedInodes(int group) const;
 
 	//! Open xattr handle and read xattrs for an inode
 	bool OpenAndReadXattrs(ext2_ino_t ino, struct ext2_xattr_handle *&h);
+
+	//! Ensure the reusable inode buffer matches the current filesystem's inode size
+	void EnsureInodeBuffer();
 
 	//===----------------------------------------------------------------------===//
 	// Lustre Extended Attribute Parsing
@@ -287,6 +293,8 @@ private:
 	ext2_inode_scan scan_;        // Inode scan handle
 	std::string device_path_;     // Device path
 	struct oi_context *oi_ctx_;   // OI lookup context (separate ext2_filsys handle)
+	std::vector<char> inode_buffer_;
+	ext2_ino_t buffered_inode_ = 0;
 
 	// For parallel block group scanning
 	std::atomic<int> next_block_group_;

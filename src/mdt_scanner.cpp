@@ -54,6 +54,10 @@ static void PopulateInodeMetadata(LustreInode &out, ext2_ino_t ino, const struct
 	out.projid = inode.i_projid;
 }
 
+static inline struct ext2_inode_large *GetBufferedInode(std::vector<char> &inode_buffer) {
+	return reinterpret_cast<struct ext2_inode_large *>(inode_buffer.data());
+}
+
 //===----------------------------------------------------------------------===//
 // Constructor / Destructor
 //===----------------------------------------------------------------------===//
@@ -96,6 +100,8 @@ void MDTScanner::Open(const std::string &device_path) {
 	next_block_group_.store(0);
 	scanned_inodes_.store(0);
 	valid_inodes_.store(0);
+	buffered_inode_ = 0;
+	inode_buffer_.clear();
 
 	// Reset link iteration state
 	pending_inode_ = LustreInode();
@@ -109,6 +115,8 @@ void MDTScanner::Open(const std::string &device_path) {
 	pending_layout_idx_ = 0;
 	pending_layouts_.clear();
 	skip_current_group_ = false;
+	buffered_inode_ = 0;
+	inode_buffer_.clear();
 }
 
 void MDTScanner::Close() {
@@ -236,14 +244,28 @@ void MDTScanner::ResetBlockGroupCounter() {
 // Internal Helpers
 //===----------------------------------------------------------------------===//
 
+void MDTScanner::EnsureInodeBuffer() {
+	auto inode_size = static_cast<size_t>(GetInodeSize());
+	if (inode_size < sizeof(struct ext2_inode_large)) {
+		inode_size = sizeof(struct ext2_inode_large);
+	}
+	if (inode_buffer_.size() != inode_size) {
+		inode_buffer_.resize(inode_size);
+	}
+}
+
 bool MDTScanner::GetNextRawInode(ext2_ino_t &ino, struct ext2_inode_large &raw) {
 	if (!scan_) {
 		throw IOException("Inode scan not started for '%s'", device_path_);
 	}
 
+	EnsureInodeBuffer();
+	auto inode_size = static_cast<int>(GetInodeSize());
+
 	while (true) {
+		memset(inode_buffer_.data(), 0, inode_buffer_.size());
 		errcode_t err = ext2fs_get_next_inode_full(scan_, &ino,
-			(struct ext2_inode *)&raw, sizeof(raw));
+			reinterpret_cast<struct ext2_inode *>(inode_buffer_.data()), inode_size);
 		if (err) {
 			throw IOException("Failed to get next inode for '%s': %s", device_path_, error_message(err));
 		}
@@ -253,6 +275,8 @@ bool MDTScanner::GetNextRawInode(ext2_ino_t &ino, struct ext2_inode_large &raw) 
 			return false;
 		}
 
+		raw = *GetBufferedInode(inode_buffer_);
+		buffered_inode_ = ino;
 		scanned_inodes_++;
 
 		// Skip unused inodes (all zeros)
@@ -279,9 +303,13 @@ bool MDTScanner::GetNextRawInode(ext2_ino_t &ino, struct ext2_inode_large &raw, 
 		return false;
 	}
 
+	EnsureInodeBuffer();
+	auto inode_size = static_cast<int>(GetInodeSize());
+
 	while (true) {
+		memset(inode_buffer_.data(), 0, inode_buffer_.size());
 		errcode_t err = ext2fs_get_next_inode_full(scan_, &ino,
-			(struct ext2_inode *)&raw, sizeof(raw));
+			reinterpret_cast<struct ext2_inode *>(inode_buffer_.data()), inode_size);
 		if (err) {
 			throw IOException("Failed to get next inode for '%s': %s", device_path_, error_message(err));
 		}
@@ -296,6 +324,8 @@ bool MDTScanner::GetNextRawInode(ext2_ino_t &ino, struct ext2_inode_large &raw, 
 			return false;
 		}
 
+		raw = *GetBufferedInode(inode_buffer_);
+		buffered_inode_ = ino;
 		scanned_inodes_++;
 
 		// Skip unused inodes (all zeros)
@@ -310,6 +340,32 @@ bool MDTScanner::GetNextRawInode(ext2_ino_t &ino, struct ext2_inode_large &raw, 
 
 		return true;
 	}
+}
+
+bool MDTScanner::ReadRawInode(ext2_ino_t ino, struct ext2_inode_large &raw) {
+	if (!fs_) {
+		throw IOException("Filesystem not open for '%s'", device_path_);
+	}
+
+	EnsureInodeBuffer();
+	memset(inode_buffer_.data(), 0, inode_buffer_.size());
+
+	errcode_t err = ext2fs_read_inode_full(fs_, ino,
+		reinterpret_cast<struct ext2_inode *>(inode_buffer_.data()), static_cast<int>(GetInodeSize()));
+	if (err) {
+		return false;
+	}
+
+	raw = *GetBufferedInode(inode_buffer_);
+	buffered_inode_ = ino;
+
+	if (raw.i_mode == 0 && raw.i_links_count == 0) {
+		return false;
+	}
+	if (raw.i_dtime != 0) {
+		return false;
+	}
+	return true;
 }
 
 bool MDTScanner::BlockGroupHasAllocatedInodes(int group) const {
@@ -334,12 +390,20 @@ bool MDTScanner::BlockGroupHasAllocatedInodes(int group) const {
 
 bool MDTScanner::OpenAndReadXattrs(ext2_ino_t ino, struct ext2_xattr_handle *&h) {
 	h = nullptr;
+
+	if (buffered_inode_ != ino) {
+		struct ext2_inode_large raw;
+		if (!ReadRawInode(ino, raw)) {
+			return false;
+		}
+	}
+
 	errcode_t err = ext2fs_xattrs_open(fs_, ino, &h);
 	if (err || !h) {
 		return false;
 	}
 
-	err = ext2fs_xattrs_read(h);
+	err = ext2fs_xattrs_read_inode(h, GetBufferedInode(inode_buffer_));
 	if (err) {
 		ext2fs_xattrs_close(&h);
 		h = nullptr;
@@ -712,17 +776,7 @@ bool MDTScanner::ReadInode(ext2_ino_t ino, LustreInode &out, const MDTScanConfig
 
 	// Read the raw inode
 	struct ext2_inode_large inode;
-	memset(&inode, 0, sizeof(inode));
-	errcode_t err = ext2fs_read_inode_full(fs_, ino, (struct ext2_inode *)&inode, sizeof(inode));
-	if (err) {
-		return false;
-	}
-
-	// Skip unused/deleted inodes
-	if (inode.i_mode == 0 && inode.i_links_count == 0) {
-		return false;
-	}
-	if (inode.i_dtime != 0) {
+	if (!ReadRawInode(ino, inode)) {
 		return false;
 	}
 
@@ -801,16 +855,7 @@ bool MDTScanner::ReadInodeLinks(ext2_ino_t ino, LustreInode &inode_out, std::vec
 	links_out.clear();
 
 	struct ext2_inode_large inode;
-	memset(&inode, 0, sizeof(inode));
-	errcode_t err = ext2fs_read_inode_full(fs_, ino, (struct ext2_inode *)&inode, sizeof(inode));
-	if (err) {
-		return false;
-	}
-
-	if (inode.i_mode == 0 && inode.i_links_count == 0) {
-		return false;
-	}
-	if (inode.i_dtime != 0) {
+	if (!ReadRawInode(ino, inode)) {
 		return false;
 	}
 
@@ -1137,15 +1182,7 @@ bool MDTScanner::ReadInodeLayouts(ext2_ino_t ino, LustreInode &inode_out,
 	components.clear();
 
 	struct ext2_inode_large inode;
-	memset(&inode, 0, sizeof(inode));
-	errcode_t err = ext2fs_read_inode_full(fs_, ino, (struct ext2_inode *)&inode, sizeof(inode));
-	if (err) {
-		return false;
-	}
-	if (inode.i_mode == 0 && inode.i_links_count == 0) {
-		return false;
-	}
-	if (inode.i_dtime != 0) {
+	if (!ReadRawInode(ino, inode)) {
 		return false;
 	}
 
@@ -1541,15 +1578,7 @@ bool MDTScanner::ReadInodeObjects(ext2_ino_t ino, LustreInode &inode_out,
 	objects.clear();
 
 	struct ext2_inode_large inode;
-	memset(&inode, 0, sizeof(inode));
-	errcode_t err = ext2fs_read_inode_full(fs_, ino, (struct ext2_inode *)&inode, sizeof(inode));
-	if (err) {
-		return false;
-	}
-	if (inode.i_mode == 0 && inode.i_links_count == 0) {
-		return false;
-	}
-	if (inode.i_dtime != 0) {
+	if (!ReadRawInode(ino, inode)) {
 		return false;
 	}
 
