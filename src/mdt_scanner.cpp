@@ -1908,6 +1908,96 @@ bool MDTScanner::LookupName(ext2_ino_t dir_ino, const std::string &name, ext2_in
 }
 
 //===----------------------------------------------------------------------===//
+// GetNextDirMapEntries - sequential scan for directory inodes with LMV/LinkEA
+//===----------------------------------------------------------------------===//
+
+bool MDTScanner::GetNextDirMapEntries(ext2_ino_t &ino_out, LustreFID &fid_out, LustreLMV &lmv_out,
+                                      std::vector<LinkEntry> &links_out,
+                                      std::vector<DirEntry> &dir_entries_out,
+                                      const MDTScanConfig &config) {
+	ext2_ino_t ino;
+
+	while (true) {
+		if (!GetNextRawInode(ino)) {
+			return false;
+		}
+
+		// Only process directory inodes
+		auto *raw = reinterpret_cast<const struct ext2_inode *>(inode_buffer_.data());
+		if ((raw->i_mode & 0xF000) != 0x4000) {
+			continue;
+		}
+
+		fid_out = LustreFID();
+		lmv_out = LustreLMV();
+		links_out.clear();
+		dir_entries_out.clear();
+
+		ParseBufferedFID(fid_out);
+		if (config.skip_no_fid && !fid_out.IsValid()) {
+			continue;
+		}
+
+		// Parse LMV (may not exist for plain directories)
+		ParseBufferedLMV(lmv_out);
+
+		// Parse LinkEA (needed for slave LMV to locate master)
+		ParseBufferedLinkEA(links_out);
+
+		// For master striped dirs, read directory entries to find shard sub-entries
+		if (lmv_out.IsMaster()) {
+			ReadDirectoryEntries(ino, dir_entries_out);
+		}
+
+		ino_out = ino;
+		return true;
+	}
+}
+
+bool MDTScanner::GetNextDirMapEntries(ext2_ino_t &ino_out, LustreFID &fid_out, LustreLMV &lmv_out,
+                                      std::vector<LinkEntry> &links_out,
+                                      std::vector<DirEntry> &dir_entries_out,
+                                      const MDTScanConfig &config, ext2_ino_t max_ino) {
+	ext2_ino_t ino;
+
+	while (true) {
+		if (!GetNextRawInode(ino, max_ino)) {
+			return false;
+		}
+
+		// Only process directory inodes
+		auto *raw = reinterpret_cast<const struct ext2_inode *>(inode_buffer_.data());
+		if ((raw->i_mode & 0xF000) != 0x4000) {
+			continue;
+		}
+
+		fid_out = LustreFID();
+		lmv_out = LustreLMV();
+		links_out.clear();
+		dir_entries_out.clear();
+
+		ParseBufferedFID(fid_out);
+		if (config.skip_no_fid && !fid_out.IsValid()) {
+			continue;
+		}
+
+		// Parse LMV (may not exist for plain directories)
+		ParseBufferedLMV(lmv_out);
+
+		// Parse LinkEA (needed for slave LMV to locate master)
+		ParseBufferedLinkEA(links_out);
+
+		// For master striped dirs, read directory entries to find shard sub-entries
+		if (lmv_out.IsMaster()) {
+			ReadDirectoryEntries(ino, dir_entries_out);
+		}
+
+		ino_out = ino;
+		return true;
+	}
+}
+
+//===----------------------------------------------------------------------===//
 // Lustre Extended Attribute Parsing
 //===----------------------------------------------------------------------===//
 
@@ -1973,6 +2063,62 @@ bool MDTScanner::ParseBufferedLinkEA(std::vector<LinkEntry> &links) {
 		return false;
 	}
 	return ParseLinkEAValue(value_ptr, value_len, links);
+}
+
+//===----------------------------------------------------------------------===//
+// ParseBufferedLMV - parse trusted.lmv xattr from buffered inode
+//===----------------------------------------------------------------------===//
+
+bool MDTScanner::ParseBufferedLMV(LustreLMV &lmv) {
+	lmv = LustreLMV();
+
+	const uint8_t *value_ptr = nullptr;
+	size_t value_len = 0;
+	if (!ReadBufferedXattrValue(TRUSTED_XATTR_INDEX, "lmv", 3, value_ptr, value_len)) {
+		return false;
+	}
+	if (!value_ptr || value_len < LMV_HEADER_SIZE) {
+		return false;
+	}
+
+	// Parse header fields (little-endian on disk)
+	// Offset 0:  lmv_magic (u32)
+	// Offset 4:  lmv_stripe_count (u32)
+	// Offset 8:  lmv_master_mdt_index (u32) - master: MDT index, slave: stripe index
+	// Offset 12: lmv_hash_type (u32)
+	// Offset 16: lmv_layout_version (u32)
+	// Offset 20: lmv_migrate_offset (u32)
+	// Offset 24: lmv_migrate_hash (u32)
+	// Offset 28: lmv_padding2 (u32)
+	// Offset 32: lmv_padding3 (u64)
+	// Offset 40: lmv_pool_name[16]
+	memcpy(&lmv.lmv_magic,            value_ptr + 0,  sizeof(uint32_t));
+	memcpy(&lmv.lmv_stripe_count,     value_ptr + 4,  sizeof(uint32_t));
+	memcpy(&lmv.lmv_master_mdt_index, value_ptr + 8,  sizeof(uint32_t));
+	memcpy(&lmv.lmv_hash_type,        value_ptr + 12, sizeof(uint32_t));
+	memcpy(&lmv.lmv_layout_version,   value_ptr + 16, sizeof(uint32_t));
+	memcpy(&lmv.lmv_migrate_offset,   value_ptr + 20, sizeof(uint32_t));
+	memcpy(&lmv.lmv_migrate_hash,     value_ptr + 24, sizeof(uint32_t));
+
+	const char *pool_ptr = reinterpret_cast<const char *>(value_ptr + 40);
+	size_t pool_len = strnlen(pool_ptr, LMV_POOL_NAME_SIZE);
+	if (pool_len > 0) {
+		lmv.lmv_pool_name.assign(pool_ptr, pool_len);
+	}
+
+	if (!lmv.IsValid()) {
+		lmv = LustreLMV();
+		return false;
+	}
+
+	return true;
+}
+
+bool MDTScanner::ReadInodeLMV(ext2_ino_t ino, LustreLMV &lmv_out) {
+	if (!ReadRawInode(ino)) {
+		return false;
+	}
+	return ParseBufferedLMV(lmv_out);
 }
 
 //===----------------------------------------------------------------------===//

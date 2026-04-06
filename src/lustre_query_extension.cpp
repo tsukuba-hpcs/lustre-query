@@ -17,6 +17,7 @@
 #include "lustre_links.hpp"
 #include "lustre_layouts.hpp"
 #include "lustre_objects.hpp"
+#include "lustre_dirmap.hpp"
 #include "lustre_fid2path.hpp"
 #include "lustre_path2fid.hpp"
 #include "lustre_optimizer.hpp"
@@ -56,6 +57,9 @@ static void LoadInternal(ExtensionLoader &loader) {
 
 	// Register the lustre_objects table function set
 	loader.RegisterFunction(lustre::LustreObjectsFunction::GetFunctionSet());
+
+	// Register the lustre_dirmap table function set
+	loader.RegisterFunction(lustre::LustreDirMapFunction::GetFunctionSet());
 
 	// Register the lustre_fid2path scalar function set
 	loader.RegisterFunction(lustre::LustreFid2PathFunction::GetFunctionSet());

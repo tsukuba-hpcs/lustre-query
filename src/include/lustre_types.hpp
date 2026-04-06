@@ -137,6 +137,50 @@ constexpr uint16_t MIRROR_ID_SHIFT = 16;
 constexpr uint32_t MIRROR_ID_MASK = 0x7FFF0000;
 
 //===----------------------------------------------------------------------===//
+// LMV (Lustre Metadata Volume) - directory stripe information
+//===----------------------------------------------------------------------===//
+
+// LMV magic numbers
+constexpr uint32_t LMV_MAGIC_V1     = 0x0CD20CD0;  // Master striped directory
+constexpr uint32_t LMV_MAGIC_STRIPE = 0x0CD40CD0;  // Slave/shard of striped directory
+
+// LMV hash type flags (upper 16 bits of lmv_hash_type)
+constexpr uint32_t LMV_HASH_FLAG_MIGRATION = 0x80000000;
+constexpr uint32_t LMV_HASH_FLAG_SPLIT     = 0x08000000;
+constexpr uint32_t LMV_HASH_FLAG_MERGE     = 0x04000000;
+constexpr uint32_t LMV_HASH_TYPE_MASK      = 0x0000FFFF;
+
+// LMV on-disk header size (without variable-length FID array)
+constexpr size_t LMV_HEADER_SIZE    = 56;
+
+// Pool name size (LOV_MAXPOOLNAME + 1 including null)
+constexpr size_t LMV_POOL_NAME_SIZE = 16;
+
+struct LustreLMV {
+	uint32_t lmv_magic;              // LMV_MAGIC_V1 or LMV_MAGIC_STRIPE
+	uint32_t lmv_stripe_count;       // Number of stripes
+	uint32_t lmv_master_mdt_index;   // Master: MDT index, Slave: stripe index
+	uint32_t lmv_hash_type;          // Hash type + flags
+	uint32_t lmv_layout_version;
+	uint32_t lmv_migrate_offset;
+	uint32_t lmv_migrate_hash;
+	std::string lmv_pool_name;
+
+	LustreLMV() : lmv_magic(0), lmv_stripe_count(0), lmv_master_mdt_index(0),
+	              lmv_hash_type(0), lmv_layout_version(0), lmv_migrate_offset(0),
+	              lmv_migrate_hash(0) {}
+
+	bool IsMaster() const { return lmv_magic == LMV_MAGIC_V1; }
+	bool IsSlave() const  { return lmv_magic == LMV_MAGIC_STRIPE; }
+	bool IsValid() const  { return IsMaster() || IsSlave(); }
+
+	uint32_t HashType() const { return lmv_hash_type & LMV_HASH_TYPE_MASK; }
+	bool IsLayoutChanging() const {
+		return (lmv_hash_type & (LMV_HASH_FLAG_MIGRATION | LMV_HASH_FLAG_SPLIT | LMV_HASH_FLAG_MERGE)) != 0;
+	}
+};
+
+//===----------------------------------------------------------------------===//
 // SOM (Size on MDS) - stored in trusted.som xattr
 //===----------------------------------------------------------------------===//
 struct LustreSOM {

@@ -10,6 +10,7 @@ A DuckDB extension that scans Lustre MDT (Metadata Target) devices directly via 
 | `lustre_links(device)` | Hard link information (FID, parent FID, filename) |
 | `lustre_layouts(device)` | Layout components (stripe config, PFL/FLR/EC) |
 | `lustre_objects(device)` | OST object placement (per-stripe OST assignment) |
+| `lustre_dirmap(device)` | DNE2-aware directory mapping (physical parent FID to logical directory FID) |
 
 Each function accepts a single device path (`VARCHAR`) or a list of devices (`LIST(VARCHAR)`).
 
@@ -48,6 +49,18 @@ WHERE uid = 0 AND type = 'file';
 
 -- Scan multiple MDTs
 SELECT * FROM lustre_inodes(['/dev/mapper/mdt0', '/dev/mapper/mdt1']);
+
+-- DNE2-aware logical directory entry count (correct for striped directories)
+SELECT
+  d.dir_fid,
+  count(*) AS entry_count
+FROM lustre_links(['/dev/mapper/mdt0', '/dev/mapper/mdt1']) l
+JOIN lustre_dirmap(['/dev/mapper/mdt0', '/dev/mapper/mdt1']) d
+  ON l.parent_fid = d.parent_fid
+JOIN lustre_inodes(['/dev/mapper/mdt0', '/dev/mapper/mdt1']) i
+  ON i.fid = d.dir_fid
+WHERE i.type = 'dir'
+GROUP BY d.dir_fid;
 ```
 
 ## Key Features
@@ -55,6 +68,7 @@ SELECT * FROM lustre_inodes(['/dev/mapper/mdt0', '/dev/mapper/mdt1']);
 - **Parallel scanning** — Partitions work by block group for multi-threaded scans of large MDTs
 - **Filter pushdown** — Converts FID predicates in WHERE clauses to OI B-tree lookups, avoiding full scans
 - **Fused scan optimization** — The optimizer detects joins between `lustre_inodes` and `lustre_links` / `lustre_layouts` / `lustre_objects`, rewriting them into single-pass fused scans
+- **DNE2-aware directory mapping** — `lustre_dirmap` normalizes striped directory shards to logical directory identities, with cross-MDT cooperative FID resolution
 - **Column pruning** — Reads only the requested columns, skipping unnecessary xattr parsing
 
 ## Dependencies
@@ -146,3 +160,22 @@ LOAD 'build/release/extension/lustre_query/lustre_query.duckdb_extension';
 | ost_oi_id | UBIGINT | OST object ID |
 | ost_oi_seq | UBIGINT | OST object sequence |
 | device | VARCHAR | Source device path |
+
+### lustre_dirmap
+
+Maps physical namespace-bearing parent objects (shards or plain directories) to logical directory identities. Under DNE2, `lustre_links.parent_fid` may point to a shard rather than the master directory. This table provides the normalization layer.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| dir_fid | VARCHAR | Logical directory FID (master FID for striped, self for plain) |
+| parent_fid | VARCHAR | Physical namespace-bearing object FID (shard FID or self for plain) |
+| dir_device | VARCHAR | Device where dir_fid lives |
+| parent_device | VARCHAR | Device where parent_fid lives |
+| master_mdt_index | UINTEGER | MDT index of master directory |
+| stripe_index | UINTEGER | Stripe index (0 for master/plain) |
+| stripe_count | UINTEGER | Total stripe count (1 for plain) |
+| hash_type | UINTEGER | LMV hash type and flags |
+| layout_version | UINTEGER | LMV layout version |
+| source | VARCHAR | Row source: `plain`, `master`, or `slave` |
+
+When multiple devices are provided, cross-MDT OI lookup resolves all device columns. Masters emit all shard mappings authoritatively; slaves are skipped when their master is reachable (emitted as fallback only for partial scans).

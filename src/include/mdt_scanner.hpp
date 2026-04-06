@@ -240,6 +240,21 @@ public:
 	//! Read a specific inode's FID only
 	bool ReadInodeFID(ext2_ino_t ino, LustreFID &fid_out);
 
+	//! Read a specific inode's LMV xattr
+	bool ReadInodeLMV(ext2_ino_t ino, LustreLMV &lmv_out);
+
+	//! Sequential scan: next directory inode with FID, LMV, LinkEA, and dir entries (if master)
+	bool GetNextDirMapEntries(ext2_ino_t &ino_out, LustreFID &fid_out, LustreLMV &lmv_out,
+	                          std::vector<LinkEntry> &links_out,
+	                          std::vector<DirEntry> &dir_entries_out,
+	                          const MDTScanConfig &config);
+
+	//! Same with upper bound for block-group-bounded parallel scan
+	bool GetNextDirMapEntries(ext2_ino_t &ino_out, LustreFID &fid_out, LustreLMV &lmv_out,
+	                          std::vector<LinkEntry> &links_out,
+	                          std::vector<DirEntry> &dir_entries_out,
+	                          const MDTScanConfig &config, ext2_ino_t max_ino);
+
 	//! Read directory entries (children) of a directory inode
 	bool ReadDirectoryEntries(ext2_ino_t dir_ino, std::vector<DirEntry> &entries_out);
 
@@ -303,6 +318,7 @@ private:
 	bool ParseBufferedLinkEA(std::vector<LinkEntry> &links);
 	bool ParseBufferedLOVDetailed(std::vector<LustreLayoutComponent> *components,
 	                              std::vector<LustreOSTObject> *objects);
+	bool ParseBufferedLMV(LustreLMV &lmv);
 
 	ext2_filsys fs_;              // Filesystem handle
 	ext2_inode_scan scan_;        // Inode scan handle
