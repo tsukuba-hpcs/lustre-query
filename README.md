@@ -10,7 +10,7 @@ A DuckDB extension that scans Lustre MDT (Metadata Target) devices directly via 
 | `lustre_links(device)` | Hard link information (FID, parent FID, filename) |
 | `lustre_layouts(device)` | Layout components (stripe config, PFL/FLR/EC) |
 | `lustre_objects(device)` | OST object placement (per-stripe OST assignment) |
-| `lustre_dirmap(device)` | DNE2-aware directory mapping (physical parent FID to logical directory FID) |
+| `lustre_dirmap(device)` | DNE1/DNE2-aware directory mapping (physical parent FID to logical directory FID) |
 
 Each function accepts a single device path (`VARCHAR`) or a list of devices (`LIST(VARCHAR)`).
 
@@ -50,7 +50,8 @@ WHERE uid = 0 AND type = 'file';
 -- Scan multiple MDTs
 SELECT * FROM lustre_inodes(['/dev/mapper/mdt0', '/dev/mapper/mdt1']);
 
--- DNE2-aware logical directory entry count (correct for striped directories)
+-- DNE-aware logical directory entry count (correct for both DNE1 and DNE2)
+-- The optimizer automatically fuses this 3-way join into a single scan
 SELECT
   d.dir_fid,
   count(*) AS entry_count
@@ -61,14 +62,19 @@ JOIN lustre_inodes(['/dev/mapper/mdt0', '/dev/mapper/mdt1']) i
   ON i.fid = d.dir_fid
 WHERE i.type = 'dir'
 GROUP BY d.dir_fid;
+
+-- Find directories with remote parents (DNE1)
+SELECT dir_fid, dir_device, lma_incompat
+FROM lustre_dirmap(['/dev/mapper/mdt0', '/dev/mapper/mdt1'])
+WHERE lma_incompat & 4 != 0;  -- LMAI_REMOTE_PARENT
 ```
 
 ## Key Features
 
 - **Parallel scanning** — Partitions work by block group for multi-threaded scans of large MDTs
 - **Filter pushdown** — Converts FID predicates in WHERE clauses to OI B-tree lookups, avoiding full scans
-- **Fused scan optimization** — The optimizer detects joins between `lustre_inodes` and `lustre_links` / `lustre_layouts` / `lustre_objects`, rewriting them into single-pass fused scans
-- **DNE2-aware directory mapping** — `lustre_dirmap` normalizes striped directory shards to logical directory identities, with cross-MDT cooperative FID resolution
+- **Fused scan optimization** — The optimizer detects joins between `lustre_inodes` and `lustre_links` / `lustre_layouts` / `lustre_objects` / `lustre_dirmap`, rewriting them into single-pass fused scans. Supports 3-way fusion of `lustre_links JOIN lustre_dirmap JOIN lustre_inodes` into a single scan with cached lookups.
+- **DNE1/DNE2-aware directory mapping** — `lustre_dirmap` normalizes striped directory shards to logical directory identities, with cross-MDT cooperative FID resolution. Agent inodes (DNE1 remote directory stubs) are automatically skipped to prevent duplicates.
 - **Column pruning** — Reads only the requested columns, skipping unnecessary xattr parsing
 
 ## Dependencies
@@ -177,5 +183,28 @@ Maps physical namespace-bearing parent objects (shards or plain directories) to 
 | hash_type | UINTEGER | LMV hash type and flags |
 | layout_version | UINTEGER | LMV layout version |
 | source | VARCHAR | Row source: `plain`, `master`, or `slave` |
+| lma_incompat | UINTEGER | LMA incompat flags (see below) |
 
-When multiple devices are provided, cross-MDT OI lookup resolves all device columns. Masters emit all shard mappings authoritatively; slaves are skipped when their master is reachable (emitted as fallback only for partial scans).
+When multiple devices are provided, cross-MDT OI lookup resolves all device columns. Masters emit all shard mappings authoritatively; slaves are skipped when their master is reachable (emitted as fallback only for partial scans). Agent inodes (DNE1 remote directory stubs with `LMAI_AGENT`) are automatically skipped.
+
+**LMA incompat flags:**
+
+| Flag | Value | Meaning |
+|------|-------|---------|
+| `LMAI_RELEASED` | 0x01 | File released (HSM) |
+| `LMAI_AGENT` | 0x02 | Agent inode (DNE1 remote dir stub) — skipped by dirmap |
+| `LMAI_REMOTE_PARENT` | 0x04 | Parent directory is on a remote MDT |
+| `LMAI_STRIPED` | 0x08 | Striped directory (DNE2) |
+| `LMAI_ORPHAN` | 0x10 | Orphan inode |
+
+### Fused Join Optimization
+
+The optimizer automatically rewrites joins involving `lustre_dirmap` into fused scans:
+
+| Query Pattern | Rewritten To | Description |
+|---------------|-------------|-------------|
+| `lustre_links JOIN lustre_dirmap ON parent_fid` | `lustre_link_dirmap` | Inline dirmap resolution with per-thread cache |
+| `lustre_inodes JOIN lustre_dirmap ON fid = dir_fid` | `lustre_inode_dirmap` | Co-scan of directory inodes + dirmap |
+| `lustre_links JOIN lustre_dirmap JOIN lustre_inodes` | `lustre_link_inode_dirmap` | Full 3-way fusion with dual cache |
+
+The 3-way fusion is the most impactful: it replaces two hash joins with cached OI lookups, leveraging the high parent_fid locality (many files share few directories). Join order in the SQL query does not affect optimization — the optimizer detects the pattern regardless of table ordering.

@@ -444,8 +444,10 @@ static void Execute(ClientContext &ctx, TableFunctionInput &data_p, DataChunk &o
         LustreLMV lmv;
         std::vector<LinkEntry> links;
         std::vector<DirEntry> dir_entries;
+        uint32_t lma_incompat = 0;
 
         if (!l.scanner->GetNextDirMapEntries(ino, fid, lmv, links, dir_entries,
+                                              lma_incompat,
                                               g.scan_config, l.block_group_max_ino)) {
             l.block_group_active = false;
             g.active_block_groups.fetch_sub(1);

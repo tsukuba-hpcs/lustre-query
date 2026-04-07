@@ -641,6 +641,8 @@ private:
 		return column_idx <= 3 ? column_idx : DConstants::INVALID_INDEX;
 	}
 
+	// Fused functions don't include lma_incompat (col 10) — only map dirmap cols 0-9.
+	// If a query references lma_incompat, the optimizer won't rewrite (falls back to hash join).
 	static idx_t MapLinkDirMapDirMapColumn(idx_t column_idx) {
 		return column_idx <= 9 ? 4 + column_idx : DConstants::INVALID_INDEX;
 	}

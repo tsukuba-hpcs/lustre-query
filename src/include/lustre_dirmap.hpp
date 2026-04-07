@@ -34,7 +34,8 @@ enum class DirMapColumnIdx : idx_t {
 	STRIPE_COUNT = 6,
 	HASH_TYPE = 7,
 	LAYOUT_VERSION = 8,
-	SOURCE = 9
+	SOURCE = 9,
+	LMA_INCOMPAT = 10
 };
 
 //===----------------------------------------------------------------------===//
@@ -78,6 +79,7 @@ struct LustreDirMapGlobalState : public GlobalTableFunctionState {
 		uint32_t hash_type;
 		uint32_t layout_version;
 		std::string source;
+		uint32_t lma_incompat;
 	};
 
 	idx_t MaxThreads() const override {

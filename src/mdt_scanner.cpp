@@ -674,6 +674,21 @@ bool MDTScanner::ParseBufferedFID(LustreFID &fid) {
 	return fid.IsValid();
 }
 
+bool MDTScanner::ParseBufferedLMAIncompat(uint32_t &incompat) {
+	incompat = 0;
+	uint8_t scratch[sizeof(LustreLMA)];
+	const uint8_t *value_ptr = nullptr;
+	size_t value_len = 0;
+	if (!ReadBufferedXattrPrefix(TRUSTED_XATTR_INDEX, "lma", 3, scratch, sizeof(scratch), value_ptr, value_len)) {
+		return false;
+	}
+	if (!value_ptr || value_len < 8) {
+		return false;
+	}
+	memcpy(&incompat, value_ptr + 4, sizeof(uint32_t));
+	return true;
+}
+
 bool MDTScanner::ParseBufferedSOM(uint64_t &size, uint64_t &blocks) {
 	uint8_t scratch[sizeof(LustreSOM)];
 	const uint8_t *value_ptr = nullptr;
@@ -1914,6 +1929,7 @@ bool MDTScanner::LookupName(ext2_ino_t dir_ino, const std::string &name, ext2_in
 bool MDTScanner::GetNextDirMapEntries(ext2_ino_t &ino_out, LustreFID &fid_out, LustreLMV &lmv_out,
                                       std::vector<LinkEntry> &links_out,
                                       std::vector<DirEntry> &dir_entries_out,
+                                      uint32_t &lma_incompat_out,
                                       const MDTScanConfig &config) {
 	ext2_ino_t ino;
 
@@ -1932,9 +1948,16 @@ bool MDTScanner::GetNextDirMapEntries(ext2_ino_t &ino_out, LustreFID &fid_out, L
 		lmv_out = LustreLMV();
 		links_out.clear();
 		dir_entries_out.clear();
+		lma_incompat_out = 0;
 
 		ParseBufferedFID(fid_out);
 		if (config.skip_no_fid && !fid_out.IsValid()) {
+			continue;
+		}
+
+		// Read LMA incompat flags and skip agent inodes (DNE1 remote dir stubs)
+		ParseBufferedLMAIncompat(lma_incompat_out);
+		if (lma_incompat_out & LMAI_AGENT) {
 			continue;
 		}
 
@@ -1957,6 +1980,7 @@ bool MDTScanner::GetNextDirMapEntries(ext2_ino_t &ino_out, LustreFID &fid_out, L
 bool MDTScanner::GetNextDirMapEntries(ext2_ino_t &ino_out, LustreFID &fid_out, LustreLMV &lmv_out,
                                       std::vector<LinkEntry> &links_out,
                                       std::vector<DirEntry> &dir_entries_out,
+                                      uint32_t &lma_incompat_out,
                                       const MDTScanConfig &config, ext2_ino_t max_ino) {
 	ext2_ino_t ino;
 
@@ -1975,9 +1999,16 @@ bool MDTScanner::GetNextDirMapEntries(ext2_ino_t &ino_out, LustreFID &fid_out, L
 		lmv_out = LustreLMV();
 		links_out.clear();
 		dir_entries_out.clear();
+		lma_incompat_out = 0;
 
 		ParseBufferedFID(fid_out);
 		if (config.skip_no_fid && !fid_out.IsValid()) {
+			continue;
+		}
+
+		// Read LMA incompat flags and skip agent inodes (DNE1 remote dir stubs)
+		ParseBufferedLMAIncompat(lma_incompat_out);
+		if (lma_incompat_out & LMAI_AGENT) {
 			continue;
 		}
 
@@ -2112,6 +2143,13 @@ bool MDTScanner::ParseBufferedLMV(LustreLMV &lmv) {
 	}
 
 	return true;
+}
+
+bool MDTScanner::ReadInodeLMAIncompat(ext2_ino_t ino, uint32_t &incompat_out) {
+	if (!ReadRawInode(ino)) {
+		return false;
+	}
+	return ParseBufferedLMAIncompat(incompat_out);
 }
 
 bool MDTScanner::ReadInodeLMV(ext2_ino_t ino, LustreLMV &lmv_out) {

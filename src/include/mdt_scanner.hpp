@@ -240,19 +240,25 @@ public:
 	//! Read a specific inode's FID only
 	bool ReadInodeFID(ext2_ino_t ino, LustreFID &fid_out);
 
+	//! Read a specific inode's LMA incompat flags
+	bool ReadInodeLMAIncompat(ext2_ino_t ino, uint32_t &incompat_out);
+
 	//! Read a specific inode's LMV xattr
 	bool ReadInodeLMV(ext2_ino_t ino, LustreLMV &lmv_out);
 
-	//! Sequential scan: next directory inode with FID, LMV, LinkEA, and dir entries (if master)
+	//! Sequential scan: next directory inode with FID, LMV, LinkEA, dir entries, and LMA incompat flags.
+	//! Skips agent inodes (LMAI_AGENT).
 	bool GetNextDirMapEntries(ext2_ino_t &ino_out, LustreFID &fid_out, LustreLMV &lmv_out,
 	                          std::vector<LinkEntry> &links_out,
 	                          std::vector<DirEntry> &dir_entries_out,
+	                          uint32_t &lma_incompat_out,
 	                          const MDTScanConfig &config);
 
 	//! Same with upper bound for block-group-bounded parallel scan
 	bool GetNextDirMapEntries(ext2_ino_t &ino_out, LustreFID &fid_out, LustreLMV &lmv_out,
 	                          std::vector<LinkEntry> &links_out,
 	                          std::vector<DirEntry> &dir_entries_out,
+	                          uint32_t &lma_incompat_out,
 	                          const MDTScanConfig &config, ext2_ino_t max_ino);
 
 	//! Read directory entries (children) of a directory inode
@@ -319,6 +325,7 @@ private:
 	bool ParseBufferedLOVDetailed(std::vector<LustreLayoutComponent> *components,
 	                              std::vector<LustreOSTObject> *objects);
 	bool ParseBufferedLMV(LustreLMV &lmv);
+	bool ParseBufferedLMAIncompat(uint32_t &incompat);
 
 	ext2_filsys fs_;              // Filesystem handle
 	ext2_inode_scan scan_;        // Inode scan handle

@@ -144,7 +144,16 @@ struct LIDLocalState : public LocalTableFunctionState {
 
     bool LookupFIDCrossMDT(const LustreFID &fid, ext2_ino_t &ino_out, idx_t &scanner_idx) {
         for (idx_t i = 0; i < resolve_scanners.size(); i++) {
-            if (resolve_scanners[i]->LookupFID(fid, ino_out)) { scanner_idx = i; return true; }
+            if (resolve_scanners[i]->LookupFID(fid, ino_out)) {
+                // Skip agent inodes (DNE1 remote dir stubs)
+                uint32_t incompat = 0;
+                resolve_scanners[i]->ReadInodeLMAIncompat(ino_out, incompat);
+                if (incompat & LMAI_AGENT) {
+                    continue;
+                }
+                scanner_idx = i;
+                return true;
+            }
         }
         return false;
     }

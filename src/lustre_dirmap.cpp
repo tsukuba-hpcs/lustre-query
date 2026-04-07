@@ -38,7 +38,8 @@ static const vector<string> DIRMAP_COLUMN_NAMES = {
     "stripe_count",
     "hash_type",
     "layout_version",
-    "source"
+    "source",
+    "lma_incompat"
 };
 
 static const vector<LogicalType> DIRMAP_COLUMN_TYPES = {
@@ -51,7 +52,8 @@ static const vector<LogicalType> DIRMAP_COLUMN_TYPES = {
     LogicalType::UINTEGER,   // stripe_count
     LogicalType::UINTEGER,   // hash_type
     LogicalType::UINTEGER,   // layout_version
-    LogicalType::VARCHAR     // source
+    LogicalType::VARCHAR,    // source
+    LogicalType::UINTEGER    // lma_incompat
 };
 
 //===----------------------------------------------------------------------===//
@@ -179,6 +181,9 @@ static void WriteDirMapRow(DataChunk &output, idx_t row_idx, const vector<idx_t>
 		case static_cast<idx_t>(DirMapColumnIdx::SOURCE):
 			FlatVector::GetData<string_t>(vec)[row_idx] = StringVector::AddString(vec, row.source);
 			break;
+		case static_cast<idx_t>(DirMapColumnIdx::LMA_INCOMPAT):
+			FlatVector::GetData<uint32_t>(vec)[row_idx] = row.lma_incompat;
+			break;
 		default:
 			break;
 		}
@@ -193,6 +198,7 @@ static void GenerateDirMapRows(const LustreFID &fid, const LustreLMV &lmv,
                                 const std::vector<LinkEntry> &links,
                                 const std::vector<DirEntry> &dir_entries,
                                 const std::string &device_path,
+                                uint32_t lma_incompat,
                                 LustreDirMapLocalState &lstate,
                                 std::vector<LustreDirMapGlobalState::PendingRow> &pending) {
 	pending.clear();
@@ -210,6 +216,7 @@ static void GenerateDirMapRows(const LustreFID &fid, const LustreLMV &lmv,
 		row.hash_type = 0;
 		row.layout_version = 0;
 		row.source = "plain";
+		row.lma_incompat = lma_incompat;
 		pending.push_back(std::move(row));
 		return;
 	}
@@ -228,6 +235,7 @@ static void GenerateDirMapRows(const LustreFID &fid, const LustreLMV &lmv,
 			row.hash_type = lmv.lmv_hash_type;
 			row.layout_version = lmv.lmv_layout_version;
 			row.source = "master";
+			row.lma_incompat = lma_incompat;
 			pending.push_back(std::move(row));
 		}
 
@@ -274,6 +282,7 @@ static void GenerateDirMapRows(const LustreFID &fid, const LustreLMV &lmv,
 			row.hash_type = lmv.lmv_hash_type;
 			row.layout_version = lmv.lmv_layout_version;
 			row.source = "master";
+			row.lma_incompat = lma_incompat;
 			pending.push_back(std::move(row));
 		}
 		return;
@@ -303,6 +312,7 @@ static void GenerateDirMapRows(const LustreFID &fid, const LustreLMV &lmv,
 		row.hash_type = lmv.lmv_hash_type;
 		row.layout_version = lmv.lmv_layout_version;
 		row.source = "slave";
+		row.lma_incompat = lma_incompat;
 		pending.push_back(std::move(row));
 		return;
 	}
@@ -508,7 +518,7 @@ static bool ExecuteExactFIDPath(LustreDirMapGlobalState &gstate, LustreDirMapLoc
 				continue;
 			}
 
-			// Read LMV
+			// Read LMA incompat and skip agent inodes
 			LustreLMV lmv;
 			lstate.scanner->ReadInodeLMV(entry.ino, lmv);
 
@@ -523,8 +533,10 @@ static bool ExecuteExactFIDPath(LustreDirMapGlobalState &gstate, LustreDirMapLoc
 				lstate.scanner->ReadDirectoryEntries(entry.ino, dir_entries);
 			}
 
+			// lma_incompat not easily available from FID lookup path; set to 0
+			uint32_t lma_incompat = 0;
 			GenerateDirMapRows(inode.fid, lmv, links, dir_entries, current_device,
-			                   lstate, lstate.pending_results);
+			                   lma_incompat, lstate, lstate.pending_results);
 		}
 	}
 
@@ -563,8 +575,10 @@ static bool ExecuteSequentialPath(LustreDirMapGlobalState &gstate, LustreDirMapL
 			LustreLMV lmv;
 			std::vector<LinkEntry> links;
 			std::vector<DirEntry> dir_entries;
+			uint32_t lma_incompat = 0;
 
 			if (!lstate.scanner->GetNextDirMapEntries(ino, fid, lmv, links, dir_entries,
+			                                          lma_incompat,
 			                                          gstate.scan_config, lstate.block_group_max_ino)) {
 				lstate.block_group_active = false;
 				gstate.active_block_groups.fetch_sub(1);
@@ -578,7 +592,7 @@ static bool ExecuteSequentialPath(LustreDirMapGlobalState &gstate, LustreDirMapL
 			lstate.pending_results.clear();
 			lstate.pending_results_idx = 0;
 			GenerateDirMapRows(fid, lmv, links, dir_entries, current_device,
-			                   lstate, lstate.pending_results);
+			                   lma_incompat, lstate, lstate.pending_results);
 			break;
 		}
 	}

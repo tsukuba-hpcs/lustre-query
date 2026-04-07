@@ -106,6 +106,13 @@ struct LustreLMA {
 // LMA magic and flags
 constexpr uint32_t LUSTRE_LMA_MAGIC = 0x0BD30BD0;
 
+// LMA incompat flags (from lma_incompat field)
+constexpr uint32_t LMAI_RELEASED       = 0x00000001;  // File is released (HSM)
+constexpr uint32_t LMAI_AGENT          = 0x00000002;  // Agent inode (DNE1 remote dir stub)
+constexpr uint32_t LMAI_REMOTE_PARENT  = 0x00000004;  // Parent is on a remote MDT
+constexpr uint32_t LMAI_STRIPED        = 0x00000008;  // Striped directory (DNE2)
+constexpr uint32_t LMAI_ORPHAN         = 0x00000010;  // Orphan inode
+
 //===----------------------------------------------------------------------===//
 // LOV (Lustre Object Volume) - stripe information
 //===----------------------------------------------------------------------===//
