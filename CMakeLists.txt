@@ -23,6 +23,9 @@ set(EXTENSION_SOURCES
     src/lustre_layouts.cpp
     src/lustre_objects.cpp
     src/lustre_dirmap.cpp
+    src/lustre_link_dirmap.cpp
+    src/lustre_inode_dirmap.cpp
+    src/lustre_link_inode_dirmap.cpp
     src/lustre_fid_filter.cpp
     src/lustre_fid2path.cpp
     src/lustre_path2fid.cpp
