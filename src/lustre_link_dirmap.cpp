@@ -430,6 +430,7 @@ static void Execute(ClientContext &ctx, TableFunctionInput &data_p, DataChunk &o
         LustreLink link;
         if (!l.scanner->GetNextLink(link, g.scan_config, l.block_group_max_ino)) {
             l.block_group_active = false;
+            l.dirmap_cache.clear();
             g.active_block_groups.fetch_sub(1);
             continue;
         }

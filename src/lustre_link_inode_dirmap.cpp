@@ -20,6 +20,7 @@
 #include "duckdb/parallel/task_scheduler.hpp"
 #include "duckdb/storage/statistics/node_statistics.hpp"
 
+#include <algorithm>
 #include <unordered_map>
 
 namespace duckdb {
@@ -83,6 +84,8 @@ struct LIDGlobalState : public GlobalTableFunctionState {
     vector<idx_t> column_ids;
     MDTScanConfig scan_config;
     unique_ptr<FIDOnlyFilter> fid_filter;
+    std::unordered_map<uint32_t, idx_t> mdt_index_to_device_idx;
+    vector<FLDRangeEntry> fld_ranges;
 
     atomic<idx_t> current_device_idx;
     atomic<bool> finished;
@@ -122,55 +125,105 @@ struct LIDLocalState : public LocalTableFunctionState {
     int block_group_batch_end = 0;
 
     vector<unique_ptr<MDTScanner>> resolve_scanners;
-    vector<string> resolve_device_paths;
-    bool resolve_initialized = false;
 
     std::unordered_map<LustreFID, DirMapCacheEntry, FIDHash> dirmap_cache;
     std::unordered_map<LustreFID, LustreInode, FIDHash> inode_cache;
 
     LIDLocalState() { scanner = make_uniq<MDTScanner>(); }
 
-    void EnsureResolveInitialized(const vector<string> &dp) {
-        if (resolve_initialized) return;
-        resolve_scanners.resize(dp.size());
-        resolve_device_paths = dp;
-        for (idx_t i = 0; i < dp.size(); i++) {
-            resolve_scanners[i] = make_uniq<MDTScanner>();
-            resolve_scanners[i]->Open(dp[i]);
-            resolve_scanners[i]->InitOI();
+    MDTScanner *GetResolveScanner(const LIDGlobalState &g, idx_t device_idx) {
+        if (device_idx >= g.device_paths.size()) {
+            return nullptr;
         }
-        resolve_initialized = true;
+        if (resolve_scanners.size() < g.device_paths.size()) {
+            resolve_scanners.resize(g.device_paths.size());
+        }
+        if (!resolve_scanners[device_idx]) {
+            resolve_scanners[device_idx] = make_uniq<MDTScanner>();
+            resolve_scanners[device_idx]->Open(g.device_paths[device_idx]);
+            resolve_scanners[device_idx]->InitOI();
+        }
+        return resolve_scanners[device_idx].get();
     }
 
-    bool LookupFIDCrossMDT(const LustreFID &fid, ext2_ino_t &ino_out, idx_t &scanner_idx) {
-        for (idx_t i = 0; i < resolve_scanners.size(); i++) {
-            if (resolve_scanners[i]->LookupFID(fid, ino_out)) {
-                // Skip agent inodes (DNE1 remote dir stubs)
-                uint32_t incompat = 0;
-                resolve_scanners[i]->ReadInodeLMAIncompat(ino_out, incompat);
-                if (incompat & LMAI_AGENT) {
-                    continue;
-                }
-                scanner_idx = i;
+    bool TryLookupFIDOnDevice(const LIDGlobalState &g, idx_t device_idx, const LustreFID &fid, ext2_ino_t &ino_out) {
+        auto *resolve_scanner = GetResolveScanner(g, device_idx);
+        if (!resolve_scanner) {
+            return false;
+        }
+        if (!resolve_scanner->LookupFID(fid, ino_out)) {
+            return false;
+        }
+
+        uint32_t incompat = 0;
+        resolve_scanner->ReadInodeLMAIncompat(ino_out, incompat);
+        return (incompat & LMAI_AGENT) == 0;
+    }
+
+    bool LookupDeviceBySeq(const LIDGlobalState &g, uint64_t seq, idx_t &device_idx_out) const {
+        if (g.fld_ranges.empty()) {
+            return false;
+        }
+
+        auto it = std::upper_bound(g.fld_ranges.begin(), g.fld_ranges.end(), seq,
+                                   [](uint64_t value, const FLDRangeEntry &range) {
+                                       return value < range.seq_start;
+                                   });
+        if (it == g.fld_ranges.begin()) {
+            return false;
+        }
+        --it;
+        if (seq >= it->seq_end) {
+            return false;
+        }
+
+        auto mdt_it = g.mdt_index_to_device_idx.find(it->mdt_index);
+        if (mdt_it == g.mdt_index_to_device_idx.end()) {
+            return false;
+        }
+        device_idx_out = mdt_it->second;
+        return true;
+    }
+
+    bool LookupFIDFallback(const LIDGlobalState &g, const LustreFID &fid, ext2_ino_t &ino_out, idx_t &scanner_idx) {
+        for (idx_t device_idx = 0; device_idx < g.device_paths.size(); device_idx++) {
+            if (TryLookupFIDOnDevice(g, device_idx, fid, ino_out)) {
+                scanner_idx = device_idx;
                 return true;
             }
         }
         return false;
     }
 
-    bool ResolveDirMap(const LustreFID &parent_fid, DirMapCacheEntry &out) {
+    bool LookupFIDCrossMDT(const LIDGlobalState &g, const LustreFID &fid, ext2_ino_t &ino_out, idx_t &scanner_idx) {
+        idx_t device_idx = DConstants::INVALID_INDEX;
+        if (LookupDeviceBySeq(g, fid.f_seq, device_idx)) {
+            if (TryLookupFIDOnDevice(g, device_idx, fid, ino_out)) {
+                scanner_idx = device_idx;
+                return true;
+            }
+        }
+
+        if (LookupFIDFallback(g, fid, ino_out, scanner_idx)) {
+            return true;
+        }
+        return false;
+    }
+
+    bool ResolveDirMap(const LIDGlobalState &g, const LustreFID &parent_fid, DirMapCacheEntry &out) {
         auto it = dirmap_cache.find(parent_fid);
         if (it != dirmap_cache.end()) { out = it->second; return true; }
 
         ext2_ino_t ino; idx_t sidx;
-        if (!LookupFIDCrossMDT(parent_fid, ino, sidx)) return false;
+        if (!LookupFIDCrossMDT(g, parent_fid, ino, sidx)) return false;
 
         DirMapCacheEntry entry;
         entry.dir_fid = parent_fid;
-        entry.dir_device = resolve_device_paths[sidx];
+        entry.dir_device = g.device_paths[sidx];
 
         LustreLMV lmv;
-        resolve_scanners[sidx]->ReadInodeLMV(ino, lmv);
+        auto *resolve_scanner = GetResolveScanner(g, sidx);
+        resolve_scanner->ReadInodeLMV(ino, lmv);
 
         if (!lmv.IsValid()) {
             entry.source = "plain";
@@ -183,12 +236,12 @@ struct LIDLocalState : public LocalTableFunctionState {
         } else if (lmv.IsSlave()) {
             LustreFID link_fid;
             std::vector<LinkEntry> links;
-            resolve_scanners[sidx]->ReadInodeLinkEA(ino, link_fid, links);
+            resolve_scanner->ReadInodeLinkEA(ino, link_fid, links);
             if (!links.empty()) {
                 entry.dir_fid = links[0].parent_fid;
                 ext2_ino_t dir_ino; idx_t dir_sidx;
-                if (LookupFIDCrossMDT(entry.dir_fid, dir_ino, dir_sidx))
-                    entry.dir_device = resolve_device_paths[dir_sidx];
+                if (LookupFIDCrossMDT(g, entry.dir_fid, dir_ino, dir_sidx))
+                    entry.dir_device = g.device_paths[dir_sidx];
                 else
                     entry.dir_device.clear();
             }
@@ -204,18 +257,19 @@ struct LIDLocalState : public LocalTableFunctionState {
         return true;
     }
 
-    bool ResolveInode(const LustreFID &dir_fid, LustreInode &out) {
+    bool ResolveInode(const LIDGlobalState &g, const LustreFID &dir_fid, LustreInode &out) {
         auto it = inode_cache.find(dir_fid);
         if (it != inode_cache.end()) { out = it->second; return true; }
 
         ext2_ino_t ino; idx_t sidx;
-        if (!LookupFIDCrossMDT(dir_fid, ino, sidx)) return false;
+        if (!LookupFIDCrossMDT(g, dir_fid, ino, sidx)) return false;
 
         MDTScanConfig cfg;
         cfg.skip_no_fid = false;
         cfg.skip_no_linkea = false;
         LustreInode inode;
-        if (!resolve_scanners[sidx]->ReadInode(ino, inode, cfg)) return false;
+        auto *resolve_scanner = GetResolveScanner(g, sidx);
+        if (!resolve_scanner->ReadInode(ino, inode, cfg)) return false;
 
         inode_cache[dir_fid] = inode;
         out = inode;
@@ -266,6 +320,20 @@ static unique_ptr<GlobalTableFunctionState> InitGlobal(ClientContext &ctx, Table
     g->active_block_groups.store(0);
     g->thread_count = NumericCast<idx_t>(TaskScheduler::GetScheduler(ctx).NumberOfThreads());
     g->fid_filter = FIDOnlyFilter::Create(input.filters.get(), input.column_ids, 0);
+    for (idx_t i = 0; i < g->device_paths.size(); i++) {
+        MDTScanner probe;
+        probe.Open(g->device_paths[i]);
+
+        uint32_t mdt_index = 0;
+        if (probe.GetMDTIndex(mdt_index)) {
+            g->mdt_index_to_device_idx[mdt_index] = i;
+            if (mdt_index == 0) {
+                probe.LoadFLDRanges(g->fld_ranges);
+            }
+        }
+
+        probe.Close();
+    }
     g->use_sequential_scan = g->fid_filter &&
         (g->fid_filter->RequiresGenericEvaluation() || !g->fid_filter->HasFIDFilter() ||
          g->fid_filter->fid_values.size() > LID_SEQ_SCAN_THRESHOLD);
@@ -376,7 +444,6 @@ static bool EnsureScanner(LIDGlobalState &g, LIDLocalState &l) {
     l.initialized_device_idx = dev;
     l.initialized_device_path = g.current_device_path;
     ResetBG(l);
-    l.EnsureResolveInitialized(g.device_paths);
     return true;
 }
 
@@ -447,6 +514,8 @@ static void Execute(ClientContext &ctx, TableFunctionInput &data_p, DataChunk &o
         LustreLink link;
         if (!l.scanner->GetNextLink(link, g.scan_config, l.block_group_max_ino)) {
             l.block_group_active = false;
+            l.dirmap_cache.clear();
+            l.inode_cache.clear();
             g.active_block_groups.fetch_sub(1);
             continue;
         }
@@ -456,19 +525,19 @@ static void Execute(ClientContext &ctx, TableFunctionInput &data_p, DataChunk &o
 
         // Resolve dirmap
         DirMapCacheEntry dm;
-        bool dm_ok = l.ResolveDirMap(link.parent_fid, dm);
+        bool dm_ok = l.ResolveDirMap(g, link.parent_fid, dm);
 
         // Resolve directory inode
         LustreInode dir_inode;
         bool inode_ok = false;
         std::string inode_device;
         if (dm_ok) {
-            inode_ok = l.ResolveInode(dm.dir_fid, dir_inode);
+            inode_ok = l.ResolveInode(g, dm.dir_fid, dir_inode);
             if (inode_ok) {
                 // Find the device for the inode
                 ext2_ino_t tmp_ino; idx_t tmp_sidx;
-                if (l.LookupFIDCrossMDT(dm.dir_fid, tmp_ino, tmp_sidx))
-                    inode_device = l.resolve_device_paths[tmp_sidx];
+                if (l.LookupFIDCrossMDT(g, dm.dir_fid, tmp_ino, tmp_sidx))
+                    inode_device = g.device_paths[tmp_sidx];
             }
         }
 

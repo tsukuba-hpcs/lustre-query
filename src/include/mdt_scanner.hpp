@@ -44,6 +44,13 @@ struct DirEntry {
 	uint8_t file_type;
 };
 
+struct FLDRangeEntry {
+	uint64_t seq_start;
+	uint64_t seq_end;
+	uint32_t mdt_index;
+	uint32_t flags;
+};
+
 //===----------------------------------------------------------------------===//
 // MDT Scanner - concrete class for scanning inodes from ldiskfs-formatted MDT device
 //===----------------------------------------------------------------------===//
@@ -137,6 +144,15 @@ public:
 	//! Lookup inode number for a given FID via OI B-tree
 	//! Returns true if found, false otherwise
 	bool LookupFID(const LustreFID &fid, ext2_ino_t &ino_out);
+
+	//! Return this MDT's numeric index parsed from the filesystem label
+	bool GetMDTIndex(uint32_t &mdt_index_out);
+
+	//! Resolve a FID sequence to its home MDT index via MDT0's FLD index
+	bool LookupFIDHomeMDTIndex(const LustreFID &fid, uint32_t &mdt_index_out);
+
+	//! Load all MDT FLD ranges from MDT0's FLD index
+	bool LoadFLDRanges(std::vector<FLDRangeEntry> &ranges_out);
 
 	//! Read a specific inode by number and populate full metadata (for OI lookup path)
 	bool ReadInode(ext2_ino_t ino, LustreInode &out, const MDTScanConfig &config = MDTScanConfig{});
@@ -326,11 +342,23 @@ private:
 	                              std::vector<LustreOSTObject> *objects);
 	bool ParseBufferedLMV(LustreLMV &lmv);
 	bool ParseBufferedLMAIncompat(uint32_t &incompat);
+	bool EnsureFLDReady();
+	void CloseFLD();
 
 	ext2_filsys fs_;              // Filesystem handle
 	ext2_inode_scan scan_;        // Inode scan handle
 	std::string device_path_;     // Device path
 	struct oi_context *oi_ctx_;   // OI lookup context (separate ext2_filsys handle)
+	ext2_ino_t fld_ino_ = 0;
+	ext2_file_t fld_file_ = nullptr;
+	bool fld_initialized_ = false;
+	bool fld_available_ = false;
+	uint16_t fld_keysize_ = 0;
+	uint16_t fld_recsize_ = 0;
+	uint16_t fld_ptrsize_ = 0;
+	uint8_t fld_indirect_levels_ = 0;
+	std::vector<uint8_t> fld_root_buffer_;
+	std::vector<uint8_t> fld_block_buffer_;
 	uint64_t total_inodes_ = 0;
 	uint32_t block_group_count_ = 0;
 	uint32_t inodes_per_group_ = 0;

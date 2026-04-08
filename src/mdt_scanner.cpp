@@ -8,6 +8,8 @@
 
 #include "mdt_scanner.hpp"
 
+#include <algorithm>
+#include <cctype>
 #include <cstring>
 #include <limits>
 #include <sys/types.h>
@@ -33,6 +35,33 @@ static inline uint32_t ReadBE32(const uint8_t *p) {
 
 static inline uint16_t ReadBE16(const uint8_t *p) {
 	return (static_cast<uint16_t>(p[0]) << 8) | static_cast<uint16_t>(p[1]);
+}
+
+static inline uint64_t ReadLE64(const uint8_t *p) {
+	return static_cast<uint64_t>(p[0]) | (static_cast<uint64_t>(p[1]) << 8) |
+	       (static_cast<uint64_t>(p[2]) << 16) | (static_cast<uint64_t>(p[3]) << 24) |
+	       (static_cast<uint64_t>(p[4]) << 32) | (static_cast<uint64_t>(p[5]) << 40) |
+	       (static_cast<uint64_t>(p[6]) << 48) | (static_cast<uint64_t>(p[7]) << 56);
+}
+
+static inline uint32_t ReadLE32(const uint8_t *p) {
+	return static_cast<uint32_t>(p[0]) | (static_cast<uint32_t>(p[1]) << 8) |
+	       (static_cast<uint32_t>(p[2]) << 16) | (static_cast<uint32_t>(p[3]) << 24);
+}
+
+static inline uint16_t ReadLE16(const uint8_t *p) {
+	return static_cast<uint16_t>(p[0]) | (static_cast<uint16_t>(p[1]) << 8);
+}
+
+static inline void WriteBE64(uint8_t *p, uint64_t value) {
+	p[0] = static_cast<uint8_t>(value >> 56);
+	p[1] = static_cast<uint8_t>(value >> 48);
+	p[2] = static_cast<uint8_t>(value >> 40);
+	p[3] = static_cast<uint8_t>(value >> 32);
+	p[4] = static_cast<uint8_t>(value >> 24);
+	p[5] = static_cast<uint8_t>(value >> 16);
+	p[6] = static_cast<uint8_t>(value >> 8);
+	p[7] = static_cast<uint8_t>(value);
 }
 
 static void PopulateInodeMetadata(LustreInode &out, ext2_ino_t ino, const struct ext2_inode_large &inode) {
@@ -109,6 +138,265 @@ static bool FindXattrEntryInRegion(uint8_t name_index, const char *short_name, s
 	return false;
 }
 
+static constexpr uint64_t IAM_LFIX_ROOT_MAGIC = 0xbedabb1edULL;
+static constexpr uint16_t IAM_LEAF_HEADER_MAGIC = 0x1976;
+static constexpr const char *FLD_INDEX_NAME = "fld";
+
+struct IAMLfixRoot {
+	uint64_t magic;
+	uint16_t keysize;
+	uint16_t recsize;
+	uint16_t ptrsize;
+	uint8_t indirect_levels;
+	uint8_t padding;
+} __attribute__((packed));
+
+struct IAMDxCountLimit {
+	uint16_t limit;
+	uint16_t count;
+} __attribute__((packed));
+
+struct IAMLeafHead {
+	uint16_t magic;
+	uint16_t count;
+} __attribute__((packed));
+
+static bool ReadIndexedFileBlock(ext2_file_t file, uint32_t block_size, blk64_t lblk, std::vector<uint8_t> &buffer) {
+	buffer.resize(block_size);
+
+	errcode_t err = ext2fs_file_llseek(file, lblk * block_size, EXT2_SEEK_SET, nullptr);
+	if (err) {
+		return false;
+	}
+
+	unsigned int got = 0;
+	err = ext2fs_file_read(file, buffer.data(), block_size, &got);
+	return err == 0 && got == block_size;
+}
+
+static const uint8_t *FindIAMIndexEntry(const uint8_t *entries, uint16_t count, uint16_t keysize,
+                                        uint16_t ptrsize, const uint8_t *target_key) {
+	const auto entry_size = static_cast<idx_t>(keysize + ptrsize);
+	if (count <= 1 || entry_size == 0) {
+		return nullptr;
+	}
+
+	const auto *first = entries + entry_size;
+	const auto *last = entries + static_cast<idx_t>(count - 1) * entry_size;
+
+	if (memcmp(target_key, first, keysize) < 0) {
+		return first;
+	}
+	if (memcmp(target_key, last, keysize) >= 0) {
+		return last;
+	}
+
+	const auto *low = first;
+	const auto *high = last;
+	while (low + entry_size < high) {
+		const auto slots = static_cast<idx_t>((high - low) / entry_size);
+		const auto *mid = low + (slots / 2) * entry_size;
+		if (memcmp(mid, target_key, keysize) <= 0) {
+			low = mid + entry_size;
+		} else {
+			high = mid;
+		}
+	}
+
+	if (memcmp(low, target_key, keysize) <= 0) {
+		return low;
+	}
+	return low - entry_size;
+}
+
+static uint32_t ReadIAMIndexPointer(const uint8_t *entry, uint16_t keysize, uint16_t ptrsize) {
+	const auto *ptr = entry + keysize;
+	if (ptrsize == sizeof(uint32_t)) {
+		return ReadLE32(ptr);
+	}
+	if (ptrsize == sizeof(uint64_t)) {
+		return static_cast<uint32_t>(ReadLE64(ptr));
+	}
+	return 0;
+}
+
+static bool ParseMDTIndexLabel(const char *raw_label, uint32_t &mdt_index_out) {
+	size_t label_len = 0;
+	while (label_len < EXT2_LABEL_LEN && raw_label[label_len] != '\0') {
+		label_len++;
+	}
+	if (label_len < 4) {
+		return false;
+	}
+
+	for (size_t pos = 0; pos + 3 <= label_len; pos++) {
+		if (raw_label[pos] != 'M' || raw_label[pos + 1] != 'D' || raw_label[pos + 2] != 'T') {
+			continue;
+		}
+		if (pos != 0 && raw_label[pos - 1] != '-') {
+			continue;
+		}
+
+		size_t digits_start = pos + 3;
+		size_t digits_end = digits_start;
+		while (digits_end < label_len && std::isxdigit(static_cast<unsigned char>(raw_label[digits_end]))) {
+			digits_end++;
+		}
+		if (digits_end == digits_start || digits_end != label_len) {
+			continue;
+		}
+
+		uint32_t value = 0;
+		for (size_t i = digits_start; i < digits_end; i++) {
+			value <<= 4;
+			if (raw_label[i] >= '0' && raw_label[i] <= '9') {
+				value |= static_cast<uint32_t>(raw_label[i] - '0');
+			} else {
+				value |= static_cast<uint32_t>(std::toupper(static_cast<unsigned char>(raw_label[i])) - 'A' + 10);
+			}
+		}
+
+		mdt_index_out = value;
+		return true;
+	}
+
+	return false;
+}
+
+static constexpr uint32_t LU_SEQ_RANGE_MASK = 0x3;
+static constexpr uint32_t LU_SEQ_RANGE_MDT = 0x0;
+
+static bool CollectFLDRangesFromBlock(ext2_file_t file, uint32_t block_size, uint16_t keysize, uint16_t recsize,
+                                      uint16_t ptrsize, uint8_t remaining_levels, blk64_t block,
+                                      std::vector<uint8_t> &buffer, std::vector<FLDRangeEntry> &ranges_out) {
+	if (!ReadIndexedFileBlock(file, block_size, block, buffer)) {
+		return false;
+	}
+
+	if (remaining_levels == 0) {
+		const auto *leaf = reinterpret_cast<const IAMLeafHead *>(buffer.data());
+		if (ReadLE16(reinterpret_cast<const uint8_t *>(&leaf->magic)) != IAM_LEAF_HEADER_MAGIC) {
+			return false;
+		}
+
+		const auto leaf_count = ReadLE16(reinterpret_cast<const uint8_t *>(&leaf->count));
+		const auto entry_size = static_cast<idx_t>(keysize + recsize);
+		const auto *leaf_entries = buffer.data() + sizeof(IAMLeafHead);
+		for (idx_t i = 0; i < leaf_count; i++) {
+			const auto *entry = leaf_entries + i * entry_size;
+			const auto *record = entry + keysize;
+
+			FLDRangeEntry range;
+			range.seq_start = ReadBE64(record);
+			range.seq_end = ReadBE64(record + sizeof(uint64_t));
+			range.mdt_index = ReadBE32(record + 2 * sizeof(uint64_t));
+			range.flags = ReadBE32(record + 2 * sizeof(uint64_t) + sizeof(uint32_t));
+
+			if (range.seq_start >= range.seq_end) {
+				continue;
+			}
+			if ((range.flags & LU_SEQ_RANGE_MASK) != LU_SEQ_RANGE_MDT) {
+				continue;
+			}
+			ranges_out.push_back(range);
+		}
+		return true;
+	}
+
+	const auto *entries = buffer.data();
+	const auto *countlimit = reinterpret_cast<const IAMDxCountLimit *>(entries);
+	const auto count = ReadLE16(reinterpret_cast<const uint8_t *>(&countlimit->count));
+	const auto entry_size = static_cast<idx_t>(keysize + ptrsize);
+	for (idx_t i = 1; i < count; i++) {
+		const auto *entry = entries + i * entry_size;
+		const auto child = ReadIAMIndexPointer(entry, keysize, ptrsize);
+		if (child == 0) {
+			continue;
+		}
+		if (!CollectFLDRangesFromBlock(file, block_size, keysize, recsize, ptrsize, remaining_levels - 1,
+		                               child, buffer, ranges_out)) {
+			return false;
+		}
+	}
+
+	return true;
+}
+
+bool MDTScanner::EnsureFLDReady() {
+	if (fld_initialized_) {
+		return fld_available_;
+	}
+
+	fld_initialized_ = true;
+	fld_available_ = false;
+	fld_ino_ = 0;
+	fld_keysize_ = 0;
+	fld_recsize_ = 0;
+	fld_ptrsize_ = 0;
+	fld_indirect_levels_ = 0;
+	fld_root_buffer_.clear();
+	fld_block_buffer_.clear();
+
+	if (!fs_ || block_size_ == 0) {
+		return false;
+	}
+	if (!LookupName(EXT2_ROOT_INO, FLD_INDEX_NAME, fld_ino_)) {
+		return false;
+	}
+	if (ext2fs_file_open(fs_, fld_ino_, 0, &fld_file_) != 0) {
+		fld_file_ = nullptr;
+		return false;
+	}
+	if (!ReadIndexedFileBlock(fld_file_, block_size_, 0, fld_root_buffer_)) {
+		ext2fs_file_close(fld_file_);
+		fld_file_ = nullptr;
+		return false;
+	}
+
+	const auto *root = reinterpret_cast<const IAMLfixRoot *>(fld_root_buffer_.data());
+	if (ReadLE64(reinterpret_cast<const uint8_t *>(&root->magic)) != IAM_LFIX_ROOT_MAGIC) {
+		ext2fs_file_close(fld_file_);
+		fld_file_ = nullptr;
+		fld_root_buffer_.clear();
+		return false;
+	}
+
+	fld_keysize_ = ReadLE16(reinterpret_cast<const uint8_t *>(&root->keysize));
+	fld_recsize_ = ReadLE16(reinterpret_cast<const uint8_t *>(&root->recsize));
+	fld_ptrsize_ = ReadLE16(reinterpret_cast<const uint8_t *>(&root->ptrsize));
+	fld_indirect_levels_ = root->indirect_levels;
+	if (fld_keysize_ != sizeof(uint64_t) || fld_recsize_ != 24 || fld_ptrsize_ != sizeof(uint32_t)) {
+		ext2fs_file_close(fld_file_);
+		fld_file_ = nullptr;
+		fld_root_buffer_.clear();
+		fld_keysize_ = 0;
+		fld_recsize_ = 0;
+		fld_ptrsize_ = 0;
+		fld_indirect_levels_ = 0;
+		return false;
+	}
+
+	fld_available_ = true;
+	return true;
+}
+
+void MDTScanner::CloseFLD() {
+	if (fld_file_) {
+		ext2fs_file_close(fld_file_);
+		fld_file_ = nullptr;
+	}
+
+	fld_ino_ = 0;
+	fld_initialized_ = false;
+	fld_available_ = false;
+	fld_keysize_ = 0;
+	fld_recsize_ = 0;
+	fld_ptrsize_ = 0;
+	fld_indirect_levels_ = 0;
+	fld_root_buffer_.clear();
+	fld_block_buffer_.clear();
+}
+
 //===----------------------------------------------------------------------===//
 // Constructor / Destructor
 //===----------------------------------------------------------------------===//
@@ -162,6 +450,7 @@ void MDTScanner::Open(const std::string &device_path) {
 	xattr_value_buffer_.clear();
 	buffered_xattr_block_loaded_ = false;
 	buffered_xattr_block_valid_ = false;
+	CloseFLD();
 
 	// Reset link iteration state
 	pending_inode_ = LustreInode();
@@ -184,6 +473,7 @@ void MDTScanner::Open(const std::string &device_path) {
 
 void MDTScanner::Close() {
 	CloseScan();
+	CloseFLD();
 	CloseOI();
 
 	if (fs_) {
@@ -999,6 +1289,136 @@ bool MDTScanner::LookupFID(const LustreFID &fid, ext2_ino_t &ino_out) {
 
 	ino_out = result.ino;
 	return true;
+}
+
+bool MDTScanner::GetMDTIndex(uint32_t &mdt_index_out) {
+	if (!fs_ || !fs_->super) {
+		return false;
+	}
+
+	return ParseMDTIndexLabel(reinterpret_cast<const char *>(fs_->super->s_volume_name), mdt_index_out);
+}
+
+bool MDTScanner::LookupFIDHomeMDTIndex(const LustreFID &fid, uint32_t &mdt_index_out) {
+	if (!EnsureFLDReady()) {
+		return false;
+	}
+
+	bool found = false;
+	uint8_t key[sizeof(uint64_t)];
+	WriteBE64(key, fid.f_seq);
+
+	do {
+		const auto *entries = fld_root_buffer_.data() + sizeof(IAMLfixRoot);
+		const auto *root_countlimit = reinterpret_cast<const IAMDxCountLimit *>(entries);
+		const auto root_count = ReadLE16(reinterpret_cast<const uint8_t *>(&root_countlimit->count));
+		const auto *entry = FindIAMIndexEntry(entries, root_count, fld_keysize_, fld_ptrsize_, key);
+		if (!entry) {
+			break;
+		}
+
+		auto block = ReadIAMIndexPointer(entry, fld_keysize_, fld_ptrsize_);
+		for (uint8_t level = 0; level < fld_indirect_levels_; level++) {
+			if (!ReadIndexedFileBlock(fld_file_, block_size_, block, fld_block_buffer_)) {
+				block = 0;
+				break;
+			}
+
+			const auto *node_entries = fld_block_buffer_.data();
+			const auto *countlimit = reinterpret_cast<const IAMDxCountLimit *>(node_entries);
+			const auto count = ReadLE16(reinterpret_cast<const uint8_t *>(&countlimit->count));
+			entry = FindIAMIndexEntry(node_entries, count, fld_keysize_, fld_ptrsize_, key);
+			if (!entry) {
+				block = 0;
+				break;
+			}
+			block = ReadIAMIndexPointer(entry, fld_keysize_, fld_ptrsize_);
+		}
+		if (block == 0) {
+			break;
+		}
+
+		if (!ReadIndexedFileBlock(fld_file_, block_size_, block, fld_block_buffer_)) {
+			break;
+		}
+
+		const auto *leaf = reinterpret_cast<const IAMLeafHead *>(fld_block_buffer_.data());
+		if (ReadLE16(reinterpret_cast<const uint8_t *>(&leaf->magic)) != IAM_LEAF_HEADER_MAGIC) {
+			break;
+		}
+
+		const auto leaf_count = ReadLE16(reinterpret_cast<const uint8_t *>(&leaf->count));
+		if (leaf_count == 0) {
+			break;
+		}
+
+		const auto entry_size = static_cast<idx_t>(fld_keysize_ + fld_recsize_);
+		const auto *leaf_entries = fld_block_buffer_.data() + sizeof(IAMLeafHead);
+
+		idx_t low = 0;
+		idx_t high = leaf_count;
+		while (low < high) {
+			const auto mid = low + (high - low) / 2;
+			const auto *mid_entry = leaf_entries + mid * entry_size;
+			if (memcmp(mid_entry, key, fld_keysize_) <= 0) {
+				low = mid + 1;
+			} else {
+				high = mid;
+			}
+		}
+		if (low == 0) {
+			break;
+		}
+
+		const auto *leaf_entry = leaf_entries + (low - 1) * entry_size;
+		const auto *record = leaf_entry + fld_keysize_;
+		const auto range_start = ReadBE64(record);
+		const auto range_end = ReadBE64(record + sizeof(uint64_t));
+		if (range_start >= range_end || fid.f_seq < range_start || fid.f_seq >= range_end) {
+			break;
+		}
+
+		mdt_index_out = ReadBE32(record + 2 * sizeof(uint64_t));
+		found = true;
+	} while (false);
+
+	return found;
+}
+
+bool MDTScanner::LoadFLDRanges(std::vector<FLDRangeEntry> &ranges_out) {
+	ranges_out.clear();
+	if (!EnsureFLDReady()) {
+		return false;
+	}
+
+	const auto *entries = fld_root_buffer_.data() + sizeof(IAMLfixRoot);
+	const auto *root_countlimit = reinterpret_cast<const IAMDxCountLimit *>(entries);
+	const auto root_count = ReadLE16(reinterpret_cast<const uint8_t *>(&root_countlimit->count));
+	const auto entry_size = static_cast<idx_t>(fld_keysize_ + fld_ptrsize_);
+
+	for (idx_t i = 1; i < root_count; i++) {
+		const auto *entry = entries + i * entry_size;
+		const auto block = ReadIAMIndexPointer(entry, fld_keysize_, fld_ptrsize_);
+		if (block == 0) {
+			continue;
+		}
+		if (!CollectFLDRangesFromBlock(fld_file_, block_size_, fld_keysize_, fld_recsize_, fld_ptrsize_,
+		                               fld_indirect_levels_, block, fld_block_buffer_, ranges_out)) {
+			ranges_out.clear();
+			return false;
+		}
+	}
+
+	std::sort(ranges_out.begin(), ranges_out.end(), [](const FLDRangeEntry &lhs, const FLDRangeEntry &rhs) {
+		if (lhs.seq_start != rhs.seq_start) {
+			return lhs.seq_start < rhs.seq_start;
+		}
+		if (lhs.seq_end != rhs.seq_end) {
+			return lhs.seq_end < rhs.seq_end;
+		}
+		return lhs.mdt_index < rhs.mdt_index;
+	});
+	return !ranges_out.empty();
 }
 
 bool MDTScanner::ReadInode(ext2_ino_t ino, LustreInode &out, const MDTScanConfig &config) {
