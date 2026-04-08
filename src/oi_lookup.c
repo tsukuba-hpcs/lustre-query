@@ -14,6 +14,8 @@
 #include <string.h>
 #include <stdint.h>
 #include <errno.h>
+#include <sys/types.h>
+#include <sys/stat.h>
 #include <ext2fs/ext2fs.h>
 
 /* ---------- On-disk structures (from Lustre source) ---------- */
@@ -88,13 +90,31 @@ struct oi_context {
     ext2_filsys fs;
     int oi_count;           /* Number of OI files (1, 2, 4, ..., 64) */
     ext2_ino_t *oi_inodes;  /* Array of OI file inodes */
+    ext2_file_t *oi_files;  /* Persistent file handles for OI files */
 
     /* Cached parameters from root (same for all OI files) */
     uint16_t keysize;       /* Should be 16 for FID */
     uint16_t recsize;       /* Should be 8 for osd_inode_id */
     uint16_t ptrsize;       /* Should be 4 */
 
+    /* Small set-associative cache for OI B-tree blocks */
+    uint64_t cache_clock;
+    void *cache_storage;
+    struct oi_block_cache_entry *cache_entries;
+
     int verbose;            /* Verbose output flag */
+};
+
+#define OI_BLOCK_CACHE_WAYS 4
+#define OI_BLOCK_CACHE_SETS 64
+#define OI_BLOCK_CACHE_ENTRIES (OI_BLOCK_CACHE_WAYS * OI_BLOCK_CACHE_SETS)
+
+struct oi_block_cache_entry {
+    uint64_t block;
+    uint64_t last_used;
+    int oi_idx;
+    int valid;
+    void *data;
 };
 
 /* ---------- Directory scanning for OI files ---------- */
@@ -114,7 +134,11 @@ static int oi_dir_iterate_cb(struct ext2_dir_entry *dirent,
     int namelen = ext2fs_dirent_name_len(dirent);
     int idx;
 
-    if (namelen >= sizeof(name))
+    (void)offset;
+    (void)blocksize;
+    (void)buf;
+
+    if ((size_t)namelen >= sizeof(name))
         return 0;
 
     memcpy(name, dirent->name, namelen);
@@ -185,30 +209,49 @@ static int oi_scan_files(struct oi_context *ctx)
 
 /* ---------- Block reading helpers ---------- */
 
-static int read_oi_block(struct oi_context *ctx, ext2_ino_t oi_ino,
-                         blk64_t lblk, void *buf)
+static int ensure_oi_file_open(struct oi_context *ctx, int oi_idx)
 {
     errcode_t err;
-    ext2_file_t file;
-    unsigned int got;
-    uint64_t offset;
+    ext2_ino_t oi_ino;
 
-    err = ext2fs_file_open(ctx->fs, oi_ino, 0, &file);
+    if (oi_idx < 0 || oi_idx >= ctx->oi_count)
+        return -EINVAL;
+
+    if (ctx->oi_files[oi_idx])
+        return 0;
+
+    oi_ino = ctx->oi_inodes[oi_idx];
+    if (oi_ino == 0)
+        return -ENOENT;
+
+    err = ext2fs_file_open(ctx->fs, oi_ino, 0, &ctx->oi_files[oi_idx]);
     if (err) {
         fprintf(stderr, "Cannot open OI file inode %u: %s\n",
                 oi_ino, error_message(err));
         return -EIO;
     }
 
-    offset = lblk * ctx->fs->blocksize;
-    err = ext2fs_file_llseek(file, offset, EXT2_SEEK_SET, NULL);
-    if (err) {
-        ext2fs_file_close(file);
-        return -EIO;
-    }
+    return 0;
+}
 
-    err = ext2fs_file_read(file, buf, ctx->fs->blocksize, &got);
-    ext2fs_file_close(file);
+static int read_oi_block_uncached(struct oi_context *ctx, int oi_idx,
+                                  blk64_t lblk, void *buf)
+{
+    errcode_t err;
+    unsigned int got;
+    uint64_t offset;
+    int ret;
+
+    ret = ensure_oi_file_open(ctx, oi_idx);
+    if (ret)
+        return ret;
+
+    offset = lblk * ctx->fs->blocksize;
+    err = ext2fs_file_llseek(ctx->oi_files[oi_idx], offset, EXT2_SEEK_SET, NULL);
+    if (err)
+        return -EIO;
+
+    err = ext2fs_file_read(ctx->oi_files[oi_idx], buf, ctx->fs->blocksize, &got);
 
     if (err || got != ctx->fs->blocksize) {
         fprintf(stderr, "Cannot read block %llu: %s\n",
@@ -216,6 +259,49 @@ static int read_oi_block(struct oi_context *ctx, ext2_ino_t oi_ino,
         return -EIO;
     }
 
+    return 0;
+}
+
+static unsigned int oi_block_cache_hash(int oi_idx, blk64_t lblk)
+{
+    uint64_t hash = (uint64_t)(unsigned int)oi_idx * 11400714819323198485ull;
+    hash ^= (uint64_t)lblk * 14029467366897019727ull;
+    return (unsigned int)(hash & (OI_BLOCK_CACHE_SETS - 1));
+}
+
+static int read_oi_block_cached(struct oi_context *ctx, int oi_idx,
+                                blk64_t lblk, const void **buf_out)
+{
+    struct oi_block_cache_entry *set;
+    struct oi_block_cache_entry *victim;
+    unsigned int set_idx;
+    int way;
+    int ret;
+
+    set_idx = oi_block_cache_hash(oi_idx, lblk);
+    set = ctx->cache_entries + (set_idx * OI_BLOCK_CACHE_WAYS);
+    victim = &set[0];
+
+    for (way = 0; way < OI_BLOCK_CACHE_WAYS; way++) {
+        struct oi_block_cache_entry *entry = &set[way];
+        if (entry->valid && entry->oi_idx == oi_idx && entry->block == (uint64_t)lblk) {
+            entry->last_used = ++ctx->cache_clock;
+            *buf_out = entry->data;
+            return 0;
+        }
+        if (!entry->valid || entry->last_used < victim->last_used)
+            victim = entry;
+    }
+
+    ret = read_oi_block_uncached(ctx, oi_idx, lblk, victim->data);
+    if (ret)
+        return ret;
+
+    victim->valid = 1;
+    victim->oi_idx = oi_idx;
+    victim->block = (uint64_t)lblk;
+    victim->last_used = ++ctx->cache_clock;
+    *buf_out = victim->data;
     return 0;
 }
 
@@ -372,7 +458,7 @@ int oi_lookup(struct oi_context *ctx, const struct lu_fid *fid,
 {
     int oi_idx;
     ext2_ino_t oi_ino;
-    void *buf;
+    const void *buf;
     struct iam_lfix_root *root;
     struct dx_countlimit *cl;
     uint8_t key[16];  /* FID in big-endian */
@@ -394,27 +480,21 @@ int oi_lookup(struct oi_context *ctx, const struct lu_fid *fid,
         return -ENOENT;
     }
 
-    buf = malloc(ctx->fs->blocksize);
-    if (!buf)
-        return -ENOMEM;
-
     /* Convert FID to big-endian key */
     cpu_to_be_fid(fid, key);
 
     /* Read root block (block 0) */
-    ret = read_oi_block(ctx, oi_ino, 0, buf);
+    ret = read_oi_block_cached(ctx, oi_idx, 0, &buf);
     if (ret) {
-        free(buf);
         return ret;
     }
 
     /* Parse root header */
-    root = buf;
+    root = (struct iam_lfix_root *)buf;
     if (le64_to_cpu(root->ilr_magic) != IAM_LFIX_ROOT_MAGIC) {
         fprintf(stderr, "Bad root magic: 0x%llx (expected 0x%llx)\n",
                 (unsigned long long)le64_to_cpu(root->ilr_magic),
                 (unsigned long long)IAM_LFIX_ROOT_MAGIC);
-        free(buf);
         return -EIO;
     }
 
@@ -431,7 +511,6 @@ int oi_lookup(struct oi_context *ctx, const struct lu_fid *fid,
     /* Verify expected sizes for OI */
     if (ctx->keysize != 16 || ctx->recsize != 8 || ctx->ptrsize != 4) {
         fprintf(stderr, "Unexpected OI parameters\n");
-        free(buf);
         return -EIO;
     }
 
@@ -459,14 +538,13 @@ int oi_lookup(struct oi_context *ctx, const struct lu_fid *fid,
 
     /* Traverse intermediate index levels */
     for (level = 0; level < indirect_levels; level++) {
-        ret = read_oi_block(ctx, oi_ino, block, buf);
+        ret = read_oi_block_cached(ctx, oi_idx, block, &buf);
         if (ret) {
-            free(buf);
             return ret;
         }
 
         /* Index node: entries start at offset 0 (id_node_gap = 0) */
-        entries = buf;
+        entries = (void *)buf;
         cl = (struct dx_countlimit *)entries;
 
         if (verbose)
@@ -480,14 +558,12 @@ int oi_lookup(struct oi_context *ctx, const struct lu_fid *fid,
     }
 
     /* Now 'block' points to leaf */
-    ret = read_oi_block(ctx, oi_ino, block, buf);
+    ret = read_oi_block_cached(ctx, oi_idx, block, &buf);
     if (ret) {
-        free(buf);
         return ret;
     }
 
-    ret = search_leaf(ctx, buf, key, &rec);
-    free(buf);
+    ret = search_leaf(ctx, (void *)buf, key, &rec);
 
     if (ret == 0) {
         result->ino = rec.oii_ino;
@@ -515,6 +591,8 @@ struct oi_context *oi_open(const char *device)
 {
     struct oi_context *ctx;
     errcode_t err;
+    size_t block_bytes;
+    int i;
     int ret;
 
     ctx = calloc(1, sizeof(*ctx));
@@ -536,12 +614,47 @@ struct oi_context *oi_open(const char *device)
         return NULL;
     }
 
+    ctx->oi_files = calloc(ctx->oi_count, sizeof(ext2_file_t));
+    ctx->cache_entries = calloc(OI_BLOCK_CACHE_ENTRIES, sizeof(struct oi_block_cache_entry));
+    block_bytes = (size_t)ctx->fs->blocksize * OI_BLOCK_CACHE_ENTRIES;
+    ctx->cache_storage = malloc(block_bytes);
+    if (!ctx->oi_files || !ctx->cache_entries || !ctx->cache_storage) {
+        if (ctx->oi_files)
+            free(ctx->oi_files);
+        if (ctx->cache_entries)
+            free(ctx->cache_entries);
+        if (ctx->cache_storage)
+            free(ctx->cache_storage);
+        if (ctx->oi_inodes)
+            free(ctx->oi_inodes);
+        ext2fs_close(ctx->fs);
+        free(ctx);
+        return NULL;
+    }
+
+    for (i = 0; i < OI_BLOCK_CACHE_ENTRIES; i++) {
+        ctx->cache_entries[i].data = (char *)ctx->cache_storage + ((size_t)i * ctx->fs->blocksize);
+    }
+
     return ctx;
 }
 
 void oi_close(struct oi_context *ctx)
 {
+    int i;
+
     if (ctx) {
+        if (ctx->oi_files) {
+            for (i = 0; i < ctx->oi_count; i++) {
+                if (ctx->oi_files[i])
+                    ext2fs_file_close(ctx->oi_files[i]);
+            }
+            free(ctx->oi_files);
+        }
+        if (ctx->cache_entries)
+            free(ctx->cache_entries);
+        if (ctx->cache_storage)
+            free(ctx->cache_storage);
         if (ctx->oi_inodes)
             free(ctx->oi_inodes);
         if (ctx->fs)
