@@ -283,6 +283,9 @@ public:
 	//! Read directory entries (children) of a directory inode
 	bool ReadDirectoryEntries(ext2_ino_t dir_ino, std::vector<DirEntry> &entries_out);
 
+	//! Count directory entries (excluding "." and "..") without materializing names
+	bool CountDirectoryEntries(ext2_ino_t dir_ino, uint64_t &entry_count_out);
+
 	//! Lookup a single name in a directory (wraps ext2fs_lookup)
 	bool LookupName(ext2_ino_t dir_ino, const std::string &name, ext2_ino_t &child_ino);
 

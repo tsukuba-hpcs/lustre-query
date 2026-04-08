@@ -11,6 +11,7 @@
 #include "lustre_fid_filter.hpp"
 #include "lustre_filter.hpp"
 #include "lustre_links.hpp"
+#include "lustre_output_string_cache.hpp"
 #include "lustre_scan_state.hpp"
 #include "lustre_string_filter.hpp"
 
@@ -248,6 +249,8 @@ struct LustreInodeLinksGlobalState : public GlobalTableFunctionState {
 	uint32_t inodes_per_group = 0;
 	bool join_on_parent_fid = false;
 	bool use_sequential_scan = true;
+	bool requires_child_fid_lookup = false;
+	bool can_count_directory_entries = false;
 	idx_t thread_count = 1;
 
 	LustreInodeLinksGlobalState() : current_device_idx(0), finished(false), device_initialized(false), next_fid_idx(0),
@@ -277,6 +280,9 @@ struct LustreInodeLinksLocalState : public LocalTableFunctionState {
 	int block_group_batch_end = 0;
 	vector<LustreInodeLinkRow> pending_results;
 	idx_t pending_results_idx = 0;
+	LustreInode pending_parent_repeat_inode;
+	LustreFID pending_parent_repeat_fid;
+	idx_t pending_parent_repeat_count = 0;
 
 	LustreInodeLinksLocalState() {
 		scanner = make_uniq<MDTScanner>();
@@ -349,6 +355,9 @@ static unique_ptr<GlobalTableFunctionState> LustreInodeLinksInitGlobal(ClientCon
 	result->scan_config = bind_data.scan_config;
 	result->scan_config.read_link_names = ScanNeedsColumn(input, 17);
 	result->join_on_parent_fid = bind_data.inode_link_join_on_parent_fid;
+	result->requires_child_fid_lookup = ScanNeedsColumn(input, 15);
+	result->can_count_directory_entries =
+	    result->join_on_parent_fid && !result->requires_child_fid_lookup && !ScanNeedsColumn(input, 17);
 	result->filters = LustreInodeLinksFilter::Create(input.filters.get(), input.column_ids, result->join_on_parent_fid);
 	result->use_sequential_scan = !result->filters || result->filters->UseSequentialScan();
 	result->thread_count = NumericCast<idx_t>(TaskScheduler::GetScheduler(context).NumberOfThreads());
@@ -372,12 +381,12 @@ static void WriteTimestamp(Vector &vec, idx_t row_idx, int64_t unix_timestamp) {
 	}
 }
 
-static void WriteInodeLinkColumn(Vector &vec, idx_t col_idx, idx_t row_idx, const LustreInodeLinkRow &row,
-                                 const string &device_path) {
+static void WriteInodeLinkColumn(Vector &vec, idx_t output_col_idx, idx_t col_idx, idx_t row_idx,
+                                 const LustreInodeLinkRow &row, const string &device_path,
+                                 LustreOutputStringCache &string_cache) {
 	switch (col_idx) {
 	case 0: {
-		auto fid_str = row.inode.fid.ToString();
-		FlatVector::GetData<string_t>(vec)[row_idx] = StringVector::AddString(vec, fid_str);
+		FlatVector::GetData<string_t>(vec)[row_idx] = string_cache.GetFID(vec, output_col_idx, row.inode.fid);
 		break;
 	}
 	case 1:
@@ -422,18 +431,14 @@ static void WriteInodeLinkColumn(Vector &vec, idx_t col_idx, idx_t row_idx, cons
 		FlatVector::GetData<uint32_t>(vec)[row_idx] = row.inode.flags;
 		break;
 	case 14:
-		FlatVector::GetData<string_t>(vec)[row_idx] = StringVector::AddString(vec, device_path);
+		FlatVector::GetData<string_t>(vec)[row_idx] = string_cache.GetString(vec, output_col_idx, device_path);
 		break;
-	case 15: {
-		auto fid_str = row.link_fid.ToString();
-		FlatVector::GetData<string_t>(vec)[row_idx] = StringVector::AddString(vec, fid_str);
+	case 15:
+		FlatVector::GetData<string_t>(vec)[row_idx] = string_cache.GetFID(vec, output_col_idx, row.link_fid);
 		break;
-	}
-	case 16: {
-		auto pfid_str = row.parent_fid.ToString();
-		FlatVector::GetData<string_t>(vec)[row_idx] = StringVector::AddString(vec, pfid_str);
+	case 16:
+		FlatVector::GetData<string_t>(vec)[row_idx] = string_cache.GetFID(vec, output_col_idx, row.parent_fid);
 		break;
-	}
 	case 17:
 		FlatVector::GetData<string_t>(vec)[row_idx] = StringVector::AddString(vec, row.name);
 		break;
@@ -497,18 +502,33 @@ static bool EnsureInodeLinksScanner(LustreInodeLinksGlobalState &gstate, LustreI
 static void ResetInodeLinksPendingRows(LustreInodeLinksLocalState &lstate) {
 	lstate.pending_results.clear();
 	lstate.pending_results_idx = 0;
+	lstate.pending_parent_repeat_count = 0;
 }
 
 static bool FlushInodeLinkRows(LustreInodeLinksGlobalState &gstate, LustreInodeLinksLocalState &lstate,
-                               DataChunk &output, idx_t &output_count) {
+                               DataChunk &output, idx_t &output_count, LustreOutputStringCache &string_cache) {
 	const auto &current_device = lstate.initialized_device_path;
 	while (lstate.pending_results_idx < lstate.pending_results.size() && output_count < STANDARD_VECTOR_SIZE) {
 		auto &row = lstate.pending_results[lstate.pending_results_idx];
 		for (idx_t i = 0; i < gstate.column_ids.size(); i++) {
-			WriteInodeLinkColumn(output.data[i], gstate.column_ids[i], output_count, row, current_device);
+			WriteInodeLinkColumn(output.data[i], i, gstate.column_ids[i], output_count, row, current_device, string_cache);
 		}
 		lstate.pending_results_idx++;
 		output_count++;
+	}
+
+	if (lstate.pending_parent_repeat_count != 0) {
+		LustreInodeLinkRow row;
+		row.inode = lstate.pending_parent_repeat_inode;
+		row.parent_fid = lstate.pending_parent_repeat_fid;
+		while (lstate.pending_parent_repeat_count != 0 && output_count < STANDARD_VECTOR_SIZE) {
+			for (idx_t i = 0; i < gstate.column_ids.size(); i++) {
+				WriteInodeLinkColumn(output.data[i], i, gstate.column_ids[i], output_count, row, current_device,
+				                     string_cache);
+			}
+			lstate.pending_parent_repeat_count--;
+			output_count++;
+		}
 	}
 	return output_count < STANDARD_VECTOR_SIZE;
 }
@@ -541,7 +561,7 @@ static bool ClaimNextBlockGroup(LustreInodeLinksGlobalState &gstate, LustreInode
 }
 
 static bool ExecuteExactFIDPath(LustreInodeLinksGlobalState &gstate, LustreInodeLinksLocalState &lstate,
-                                DataChunk &output, idx_t &output_count) {
+                                DataChunk &output, idx_t &output_count, LustreOutputStringCache &string_cache) {
 	const auto &current_device = lstate.initialized_device_path;
 	struct LookupEntry {
 		ext2_ino_t ino;
@@ -549,7 +569,7 @@ static bool ExecuteExactFIDPath(LustreInodeLinksGlobalState &gstate, LustreInode
 	};
 
 	while (output_count < STANDARD_VECTOR_SIZE) {
-		if (!FlushInodeLinkRows(gstate, lstate, output, output_count)) {
+		if (!FlushInodeLinkRows(gstate, lstate, output, output_count, string_cache)) {
 			return true;
 		}
 
@@ -652,8 +672,32 @@ static void ExpandParentDirectoryRows(LustreInodeLinksGlobalState &gstate, Lustr
 	}
 }
 
+static void ExpandParentDirectoryRowsWithoutChildFID(LustreInodeLinksGlobalState &gstate,
+                                                     LustreInodeLinksLocalState &lstate,
+                                                     const LustreInode &inode, const LustreFID &parent_fid,
+                                                     const vector<DirEntry> &entries) {
+	for (const auto &entry : entries) {
+		if (gstate.filters && !gstate.filters->MatchesLink(LustreFID(), parent_fid, entry.name)) {
+			continue;
+		}
+
+		LustreInodeLinkRow row;
+		row.inode = inode;
+		row.parent_fid = parent_fid;
+		row.name = entry.name;
+		lstate.pending_results.push_back(std::move(row));
+	}
+}
+
+static void QueueRepeatedParentRows(LustreInodeLinksLocalState &lstate, const LustreInode &inode,
+                                    const LustreFID &parent_fid, idx_t entry_count) {
+	lstate.pending_parent_repeat_inode = inode;
+	lstate.pending_parent_repeat_fid = parent_fid;
+	lstate.pending_parent_repeat_count = entry_count;
+}
+
 static bool ExecuteExactParentFIDPath(LustreInodeLinksGlobalState &gstate, LustreInodeLinksLocalState &lstate,
-                                      DataChunk &output, idx_t &output_count) {
+                                      DataChunk &output, idx_t &output_count, LustreOutputStringCache &string_cache) {
 	const auto &current_device = lstate.initialized_device_path;
 	struct LookupEntry {
 		ext2_ino_t ino;
@@ -661,7 +705,7 @@ static bool ExecuteExactParentFIDPath(LustreInodeLinksGlobalState &gstate, Lustr
 	};
 
 	while (output_count < STANDARD_VECTOR_SIZE) {
-		if (!FlushInodeLinkRows(gstate, lstate, output, output_count)) {
+		if (!FlushInodeLinkRows(gstate, lstate, output, output_count, string_cache)) {
 			return true;
 		}
 
@@ -715,11 +759,31 @@ static bool ExecuteExactParentFIDPath(LustreInodeLinksGlobalState &gstate, Lustr
 				continue;
 			}
 
+			if (gstate.can_count_directory_entries) {
+				if (gstate.filters && !gstate.filters->MatchesLink(LustreFID(), entry.fid, string())) {
+					continue;
+				}
+				uint64_t entry_count = 0;
+				if (!lstate.scanner->CountDirectoryEntries(entry.ino, entry_count)) {
+					continue;
+				}
+				ResetInodeLinksPendingRows(lstate);
+				QueueRepeatedParentRows(lstate, inode, entry.fid, static_cast<idx_t>(entry_count));
+				if (!FlushInodeLinkRows(gstate, lstate, output, output_count, string_cache)) {
+					return true;
+				}
+				continue;
+			}
+
 			vector<DirEntry> entries;
 			if (!lstate.scanner->ReadDirectoryEntries(entry.ino, entries)) {
 				continue;
 			}
-			ExpandParentDirectoryRows(gstate, lstate, inode, entry.fid, entries);
+			if (gstate.requires_child_fid_lookup) {
+				ExpandParentDirectoryRows(gstate, lstate, inode, entry.fid, entries);
+			} else {
+				ExpandParentDirectoryRowsWithoutChildFID(gstate, lstate, inode, entry.fid, entries);
+			}
 		}
 	}
 
@@ -727,7 +791,7 @@ static bool ExecuteExactParentFIDPath(LustreInodeLinksGlobalState &gstate, Lustr
 }
 
 static bool ExecuteExactChildFIDPath(LustreInodeLinksGlobalState &gstate, LustreInodeLinksLocalState &lstate,
-                                     DataChunk &output, idx_t &output_count) {
+                                     DataChunk &output, idx_t &output_count, LustreOutputStringCache &string_cache) {
 	const auto &current_device = lstate.initialized_device_path;
 	struct LookupEntry {
 		ext2_ino_t ino;
@@ -735,7 +799,7 @@ static bool ExecuteExactChildFIDPath(LustreInodeLinksGlobalState &gstate, Lustre
 	};
 
 	while (output_count < STANDARD_VECTOR_SIZE) {
-		if (!FlushInodeLinkRows(gstate, lstate, output, output_count)) {
+		if (!FlushInodeLinkRows(gstate, lstate, output, output_count, string_cache)) {
 			return true;
 		}
 
@@ -829,7 +893,7 @@ static bool ExecuteExactChildFIDPath(LustreInodeLinksGlobalState &gstate, Lustre
 }
 
 static bool ExecuteSequentialSameFIDPath(LustreInodeLinksGlobalState &gstate, LustreInodeLinksLocalState &lstate,
-                                         DataChunk &output, idx_t &output_count) {
+                                         DataChunk &output, idx_t &output_count, LustreOutputStringCache &string_cache) {
 	const auto &current_device = lstate.initialized_device_path;
 	while (output_count < STANDARD_VECTOR_SIZE) {
 		if (!ClaimNextBlockGroup(gstate, lstate)) {
@@ -848,7 +912,8 @@ static bool ExecuteSequentialSameFIDPath(LustreInodeLinksGlobalState &gstate, Lu
 			}
 
 			for (idx_t i = 0; i < gstate.column_ids.size(); i++) {
-				WriteInodeLinkColumn(output.data[i], gstate.column_ids[i], output_count, row, current_device);
+				WriteInodeLinkColumn(output.data[i], i, gstate.column_ids[i], output_count, row, current_device,
+				                     string_cache);
 			}
 			output_count++;
 		}
@@ -858,10 +923,10 @@ static bool ExecuteSequentialSameFIDPath(LustreInodeLinksGlobalState &gstate, Lu
 }
 
 static bool ExecuteSequentialParentFIDPath(LustreInodeLinksGlobalState &gstate, LustreInodeLinksLocalState &lstate,
-                                           DataChunk &output, idx_t &output_count) {
+                                           DataChunk &output, idx_t &output_count, LustreOutputStringCache &string_cache) {
 	const auto &current_device = lstate.initialized_device_path;
 	while (output_count < STANDARD_VECTOR_SIZE) {
-		if (!FlushInodeLinkRows(gstate, lstate, output, output_count)) {
+		if (!FlushInodeLinkRows(gstate, lstate, output, output_count, string_cache)) {
 			return true;
 		}
 		if (!ClaimNextBlockGroup(gstate, lstate)) {
@@ -882,14 +947,34 @@ static bool ExecuteSequentialParentFIDPath(LustreInodeLinksGlobalState &gstate, 
 				continue;
 			}
 
+			if (gstate.can_count_directory_entries) {
+				if (gstate.filters && !gstate.filters->MatchesLink(LustreFID(), inode.fid, string())) {
+					continue;
+				}
+				uint64_t entry_count = 0;
+				if (!lstate.scanner->CountDirectoryEntries(inode.ino, entry_count)) {
+					continue;
+				}
+				ResetInodeLinksPendingRows(lstate);
+				QueueRepeatedParentRows(lstate, inode, inode.fid, static_cast<idx_t>(entry_count));
+				if (!FlushInodeLinkRows(gstate, lstate, output, output_count, string_cache)) {
+					return true;
+				}
+				continue;
+			}
+
 			vector<DirEntry> entries;
 			if (!lstate.scanner->ReadDirectoryEntries(inode.ino, entries)) {
 				continue;
 			}
 
 			ResetInodeLinksPendingRows(lstate);
-			ExpandParentDirectoryRows(gstate, lstate, inode, inode.fid, entries);
-			if (!FlushInodeLinkRows(gstate, lstate, output, output_count)) {
+			if (gstate.requires_child_fid_lookup) {
+				ExpandParentDirectoryRows(gstate, lstate, inode, inode.fid, entries);
+			} else {
+				ExpandParentDirectoryRowsWithoutChildFID(gstate, lstate, inode, inode.fid, entries);
+			}
+			if (!FlushInodeLinkRows(gstate, lstate, output, output_count, string_cache)) {
 				return true;
 			}
 		}
@@ -930,6 +1015,7 @@ static void LustreInodeLinksExecute(ClientContext &context, TableFunctionInput &
 	}
 
 	idx_t output_count = 0;
+	LustreOutputStringCache string_cache(gstate.column_ids.size());
 	while (output_count < STANDARD_VECTOR_SIZE) {
 		if (!EnsureInodeLinksScanner(gstate, lstate, gstate.use_sequential_scan)) {
 			break;
@@ -937,14 +1023,15 @@ static void LustreInodeLinksExecute(ClientContext &context, TableFunctionInput &
 
 		bool has_more;
 		if (gstate.use_sequential_scan) {
-			has_more = gstate.join_on_parent_fid ? ExecuteSequentialParentFIDPath(gstate, lstate, output, output_count)
-			                                     : ExecuteSequentialSameFIDPath(gstate, lstate, output, output_count);
+			has_more = gstate.join_on_parent_fid
+			               ? ExecuteSequentialParentFIDPath(gstate, lstate, output, output_count, string_cache)
+			               : ExecuteSequentialSameFIDPath(gstate, lstate, output, output_count, string_cache);
 		} else if (gstate.join_on_parent_fid) {
 			has_more = gstate.filters && gstate.filters->use_child_lookup
-			               ? ExecuteExactChildFIDPath(gstate, lstate, output, output_count)
-			               : ExecuteExactParentFIDPath(gstate, lstate, output, output_count);
+			               ? ExecuteExactChildFIDPath(gstate, lstate, output, output_count, string_cache)
+			               : ExecuteExactParentFIDPath(gstate, lstate, output, output_count, string_cache);
 		} else {
-			has_more = ExecuteExactFIDPath(gstate, lstate, output, output_count);
+			has_more = ExecuteExactFIDPath(gstate, lstate, output, output_count, string_cache);
 		}
 
 		if (!has_more) {

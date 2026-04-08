@@ -2292,26 +2292,48 @@ struct DirIterateCallbackData {
 	std::vector<lustre::DirEntry> *entries;
 };
 
-static int dir_iterate_callback(struct ext2_dir_entry *dirent,
-                                int offset, int blocksize,
-                                char *buf, void *priv_data) {
-	auto *cb_data = static_cast<DirIterateCallbackData *>(priv_data);
+struct DirCountCallbackData {
+	uint64_t count = 0;
+};
+
+static bool ShouldSkipDirEntry(const struct ext2_dir_entry *dirent) {
 	int namelen = ext2fs_dirent_name_len(dirent);
 
 	// Skip . and ..
 	if (namelen == 1 && dirent->name[0] == '.') {
-		return 0;
+		return true;
 	}
 	if (namelen == 2 && dirent->name[0] == '.' && dirent->name[1] == '.') {
+		return true;
+	}
+	return false;
+}
+
+static int dir_iterate_callback(struct ext2_dir_entry *dirent,
+                                int offset, int blocksize,
+                                char *buf, void *priv_data) {
+	auto *cb_data = static_cast<DirIterateCallbackData *>(priv_data);
+	if (ShouldSkipDirEntry(dirent)) {
 		return 0;
 	}
 
+	int namelen = ext2fs_dirent_name_len(dirent);
 	lustre::DirEntry entry;
 	entry.ino = dirent->inode;
 	entry.name.assign(dirent->name, namelen);
 	entry.file_type = ext2fs_dirent_file_type(dirent);
 	cb_data->entries->push_back(std::move(entry));
 
+	return 0;
+}
+
+static int dir_count_callback(struct ext2_dir_entry *dirent,
+                              int offset, int blocksize,
+                              char *buf, void *priv_data) {
+	auto *cb_data = static_cast<DirCountCallbackData *>(priv_data);
+	if (!ShouldSkipDirEntry(dirent)) {
+		cb_data->count++;
+	}
 	return 0;
 }
 
@@ -2332,6 +2354,23 @@ bool MDTScanner::ReadDirectoryEntries(ext2_ino_t dir_ino, std::vector<DirEntry> 
 	}
 
 	return !entries_out.empty();
+}
+
+bool MDTScanner::CountDirectoryEntries(ext2_ino_t dir_ino, uint64_t &entry_count_out) {
+	entry_count_out = 0;
+
+	if (!fs_) {
+		return false;
+	}
+
+	DirCountCallbackData cb_data;
+	errcode_t err = ext2fs_dir_iterate(fs_, dir_ino, 0, nullptr, dir_count_callback, &cb_data);
+	if (err) {
+		return false;
+	}
+
+	entry_count_out = cb_data.count;
+	return entry_count_out != 0;
 }
 
 bool MDTScanner::LookupName(ext2_ino_t dir_ino, const std::string &name, ext2_ino_t &child_ino) {
