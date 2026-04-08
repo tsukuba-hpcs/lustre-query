@@ -347,6 +347,7 @@ static unique_ptr<GlobalTableFunctionState> LustreInodeLinksInitGlobal(ClientCon
 	result->device_paths = bind_data.device_paths;
 	result->column_ids = input.column_ids;
 	result->scan_config = bind_data.scan_config;
+	result->scan_config.read_link_names = ScanNeedsColumn(input, 17);
 	result->join_on_parent_fid = bind_data.inode_link_join_on_parent_fid;
 	result->filters = LustreInodeLinksFilter::Create(input.filters.get(), input.column_ids, result->join_on_parent_fid);
 	result->use_sequential_scan = !result->filters || result->filters->UseSequentialScan();
@@ -780,7 +781,7 @@ static bool ExecuteExactChildFIDPath(LustreInodeLinksGlobalState &gstate, Lustre
 
 			LustreFID child_fid;
 			vector<LinkEntry> links;
-			if (!lstate.scanner->ReadInodeLinkEA(entry.ino, child_fid, links)) {
+			if (!lstate.scanner->ReadInodeLinkEA(entry.ino, child_fid, links, gstate.scan_config.read_link_names)) {
 				continue;
 			}
 

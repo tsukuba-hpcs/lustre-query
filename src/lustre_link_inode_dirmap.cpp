@@ -316,6 +316,7 @@ static unique_ptr<GlobalTableFunctionState> InitGlobal(ClientContext &ctx, Table
     g->device_paths = bind.device_paths;
     g->column_ids = input.column_ids;
     g->scan_config = bind.scan_config;
+    g->scan_config.read_link_names = ScanNeedsColumn(input, 2);
     g->current_device_idx.store(0);
     g->finished.store(false);
     g->device_initialized.store(false);

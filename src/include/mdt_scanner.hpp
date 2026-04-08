@@ -33,6 +33,8 @@ struct MDTScanConfig {
 	bool skip_no_linkea = true;
 	//! Internal optimization flag: false when raw inode metadata is sufficient
 	bool read_xattrs = true;
+	//! Whether LinkEA parsing should materialize link names
+	bool read_link_names = true;
 };
 
 //===----------------------------------------------------------------------===//
@@ -172,7 +174,8 @@ public:
 	                          const MDTScanConfig &config = MDTScanConfig{});
 
 	//! Read a specific inode's FID and LinkEA
-	bool ReadInodeLinkEA(ext2_ino_t ino, LustreFID &fid_out, std::vector<LinkEntry> &links_out);
+	bool ReadInodeLinkEA(ext2_ino_t ino, LustreFID &fid_out, std::vector<LinkEntry> &links_out,
+	                    bool read_names = true);
 
 	//! Read a specific inode's layout components (for lustre_layouts)
 	bool ReadInodeLayouts(ext2_ino_t ino, LustreFID &fid_out,
@@ -337,7 +340,7 @@ private:
 	bool ParseBufferedFID(LustreFID &fid);
 	bool ParseBufferedSOM(uint64_t &size, uint64_t &blocks);
 	bool HasBufferedLinkEA();
-	bool ParseBufferedLinkEA(std::vector<LinkEntry> &links);
+	bool ParseBufferedLinkEA(std::vector<LinkEntry> &links, bool read_names = true);
 	bool ParseBufferedLOVDetailed(std::vector<LustreLayoutComponent> *components,
 	                              std::vector<LustreOSTObject> *objects);
 	bool ParseBufferedLMV(LustreLMV &lmv);

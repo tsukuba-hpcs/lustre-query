@@ -32,6 +32,7 @@ bool LustreQueryBindData::Equals(const FunctionData &other_p) const {
 	return device_paths == other.device_paths &&
 	       scan_config.skip_no_fid == other.scan_config.skip_no_fid &&
 	       scan_config.skip_no_linkea == other.scan_config.skip_no_linkea &&
+	       scan_config.read_link_names == other.scan_config.read_link_names &&
 	       inode_link_join_on_parent_fid == other.inode_link_join_on_parent_fid;
 }
 
@@ -97,6 +98,30 @@ void ParseNamedParameters(const named_parameter_map_t &named_parameters, MDTScan
 			scan_config.skip_no_linkea = BooleanValue::Get(entry.second);
 		}
 	}
+}
+
+bool ScanNeedsColumn(const TableFunctionInitInput &input, idx_t actual_column_idx) {
+	for (auto projected_column_idx : input.column_ids) {
+		if (projected_column_idx == actual_column_idx) {
+			return true;
+		}
+	}
+
+	if (!input.filters) {
+		return false;
+	}
+
+	for (const auto &entry : input.filters->filters) {
+		idx_t filter_col_idx = entry.first;
+		if (filter_col_idx >= input.column_ids.size()) {
+			return true;
+		}
+		if (input.column_ids[filter_col_idx] == actual_column_idx) {
+			return true;
+		}
+	}
+
+	return false;
 }
 
 void EstimateCardinality(LustreQueryBindData &bind_data) {

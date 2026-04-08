@@ -1156,9 +1156,8 @@ bool MDTScanner::GetNextLink(LustreLink &link, const MDTScanConfig &config) {
 		}
 
 		LustreFID fid;
-		std::vector<LinkEntry> links;
 		ParseBufferedFID(fid);
-		bool has_linkea = ParseBufferedLinkEA(links);
+		bool has_linkea = ParseBufferedLinkEA(pending_links_, config.read_link_names);
 
 		// Apply config-based skip checks
 		if (config.skip_no_fid && !fid.IsValid()) {
@@ -1170,21 +1169,22 @@ bool MDTScanner::GetNextLink(LustreLink &link, const MDTScanConfig &config) {
 
 		valid_inodes_++;
 
-		if (links.empty()) {
+		if (pending_links_.empty()) {
 			continue;
 		}
 
 		// Emit the first link
 		link.fid = fid;
-		link.parent_fid = links[0].parent_fid;
-		link.name = links[0].name;
+		link.parent_fid = pending_links_[0].parent_fid;
+		link.name = pending_links_[0].name;
 
 		// If there are more links, save pending state
-		if (links.size() > 1) {
+		if (pending_links_.size() > 1) {
 			pending_fid_ = fid;
-			pending_links_ = std::move(links);
 			pending_link_idx_ = 1;
 			has_pending_links_ = true;
+		} else {
+			has_pending_links_ = false;
 		}
 
 		return true;
@@ -1215,9 +1215,8 @@ bool MDTScanner::GetNextLink(LustreLink &link, const MDTScanConfig &config, ext2
 		}
 
 		LustreFID fid;
-		std::vector<LinkEntry> links;
 		ParseBufferedFID(fid);
-		bool has_linkea = ParseBufferedLinkEA(links);
+		bool has_linkea = ParseBufferedLinkEA(pending_links_, config.read_link_names);
 
 		// Apply config-based skip checks
 		if (config.skip_no_fid && !fid.IsValid()) {
@@ -1229,21 +1228,22 @@ bool MDTScanner::GetNextLink(LustreLink &link, const MDTScanConfig &config, ext2
 
 		valid_inodes_++;
 
-		if (links.empty()) {
+		if (pending_links_.empty()) {
 			continue;
 		}
 
 		// Emit the first link
 		link.fid = fid;
-		link.parent_fid = links[0].parent_fid;
-		link.name = links[0].name;
+		link.parent_fid = pending_links_[0].parent_fid;
+		link.name = pending_links_[0].name;
 
 		// If there are more links, save pending state
-		if (links.size() > 1) {
+		if (pending_links_.size() > 1) {
 			pending_fid_ = fid;
-			pending_links_ = std::move(links);
 			pending_link_idx_ = 1;
 			has_pending_links_ = true;
+		} else {
+			has_pending_links_ = false;
 		}
 
 		return true;
@@ -1474,7 +1474,7 @@ bool MDTScanner::ReadInodeLinks(ext2_ino_t ino, LustreInode &inode_out, std::vec
 	PopulateInodeMetadata(inode_out, ino, inode);
 
 	ParseBufferedFID(inode_out.fid);
-	ParseBufferedLinkEA(links_out);
+	ParseBufferedLinkEA(links_out, config.read_link_names);
 
 	uint64_t som_size = 0;
 	uint64_t som_blocks = 0;
@@ -1505,7 +1505,7 @@ bool MDTScanner::ReadInodeLinkLayouts(ext2_ino_t ino, LustreFID &fid_out, std::v
 
 	fid_out = LustreFID();
 	ParseBufferedFID(fid_out);
-	ParseBufferedLinkEA(links_out);
+	ParseBufferedLinkEA(links_out, config.read_link_names);
 	ParseBufferedLOVDetailed(&components_out, nullptr);
 
 	if (config.skip_no_fid && !fid_out.IsValid()) {
@@ -1532,7 +1532,7 @@ bool MDTScanner::ReadInodeLinkObjects(ext2_ino_t ino, LustreFID &fid_out, std::v
 
 	fid_out = LustreFID();
 	ParseBufferedFID(fid_out);
-	ParseBufferedLinkEA(links_out);
+	ParseBufferedLinkEA(links_out, config.read_link_names);
 	ParseBufferedLOVDetailed(nullptr, &objects_out);
 
 	if (config.skip_no_fid && !fid_out.IsValid()) {
@@ -1575,9 +1575,8 @@ bool MDTScanner::GetNextInodeLink(LustreInodeLinkRow &row, const MDTScanConfig &
 		LustreInode inode_row;
 		PopulateInodeMetadata(inode_row, ino, inode);
 
-		std::vector<LinkEntry> links;
 		ParseBufferedFID(inode_row.fid);
-		ParseBufferedLinkEA(links);
+		ParseBufferedLinkEA(pending_links_, config.read_link_names);
 
 		uint64_t som_size = 0;
 		uint64_t som_blocks = 0;
@@ -1587,13 +1586,13 @@ bool MDTScanner::GetNextInodeLink(LustreInodeLinkRow &row, const MDTScanConfig &
 		}
 
 		// Inner join on fid only matches rows with a valid FID and at least one link entry.
-		if (!inode_row.fid.IsValid() || links.empty()) {
+		if (!inode_row.fid.IsValid() || pending_links_.empty()) {
 			continue;
 		}
 		if (config.skip_no_fid && !inode_row.fid.IsValid()) {
 			continue;
 		}
-		if (config.skip_no_linkea && links.empty()) {
+		if (config.skip_no_linkea && pending_links_.empty()) {
 			continue;
 		}
 
@@ -1601,15 +1600,16 @@ bool MDTScanner::GetNextInodeLink(LustreInodeLinkRow &row, const MDTScanConfig &
 
 		row.inode = inode_row;
 		row.link_fid = inode_row.fid;
-		row.parent_fid = links[0].parent_fid;
-		row.name = links[0].name;
+		row.parent_fid = pending_links_[0].parent_fid;
+		row.name = pending_links_[0].name;
 
-		if (links.size() > 1) {
+		if (pending_links_.size() > 1) {
 			pending_inode_ = inode_row;
 			pending_fid_ = inode_row.fid;
-			pending_links_ = std::move(links);
 			pending_link_idx_ = 1;
 			has_pending_links_ = true;
+		} else {
+			has_pending_links_ = false;
 		}
 		return true;
 	}
@@ -1642,9 +1642,8 @@ bool MDTScanner::GetNextInodeLink(LustreInodeLinkRow &row, const MDTScanConfig &
 		LustreInode inode_row;
 		PopulateInodeMetadata(inode_row, ino, inode);
 
-		std::vector<LinkEntry> links;
 		ParseBufferedFID(inode_row.fid);
-		ParseBufferedLinkEA(links);
+		ParseBufferedLinkEA(pending_links_, config.read_link_names);
 
 		uint64_t som_size = 0;
 		uint64_t som_blocks = 0;
@@ -1654,13 +1653,13 @@ bool MDTScanner::GetNextInodeLink(LustreInodeLinkRow &row, const MDTScanConfig &
 		}
 
 		// Inner join on fid only matches rows with a valid FID and at least one link entry.
-		if (!inode_row.fid.IsValid() || links.empty()) {
+		if (!inode_row.fid.IsValid() || pending_links_.empty()) {
 			continue;
 		}
 		if (config.skip_no_fid && !inode_row.fid.IsValid()) {
 			continue;
 		}
-		if (config.skip_no_linkea && links.empty()) {
+		if (config.skip_no_linkea && pending_links_.empty()) {
 			continue;
 		}
 
@@ -1668,28 +1667,30 @@ bool MDTScanner::GetNextInodeLink(LustreInodeLinkRow &row, const MDTScanConfig &
 
 		row.inode = inode_row;
 		row.link_fid = inode_row.fid;
-		row.parent_fid = links[0].parent_fid;
-		row.name = links[0].name;
+		row.parent_fid = pending_links_[0].parent_fid;
+		row.name = pending_links_[0].name;
 
-		if (links.size() > 1) {
+		if (pending_links_.size() > 1) {
 			pending_inode_ = inode_row;
 			pending_fid_ = inode_row.fid;
-			pending_links_ = std::move(links);
 			pending_link_idx_ = 1;
 			has_pending_links_ = true;
+		} else {
+			has_pending_links_ = false;
 		}
 		return true;
 	}
 }
 
-bool MDTScanner::ReadInodeLinkEA(ext2_ino_t ino, LustreFID &fid_out, std::vector<LinkEntry> &links_out) {
+bool MDTScanner::ReadInodeLinkEA(ext2_ino_t ino, LustreFID &fid_out, std::vector<LinkEntry> &links_out,
+                                 bool read_names) {
 	links_out.clear();
 
 	if (!ReadRawInode(ino)) {
 		return false;
 	}
 
-	return ParseBufferedFID(fid_out) && ParseBufferedLinkEA(links_out);
+	return ParseBufferedFID(fid_out) && ParseBufferedLinkEA(links_out, read_names);
 }
 
 bool MDTScanner::ReadInodeLayouts(ext2_ino_t ino, LustreFID &fid_out,
@@ -2452,7 +2453,7 @@ bool MDTScanner::GetNextDirMapEntries(ext2_ino_t &ino_out, LustreFID &fid_out, L
 // Lustre Extended Attribute Parsing
 //===----------------------------------------------------------------------===//
 
-static bool ParseLinkEAValue(const uint8_t *data, size_t value_len, std::vector<LinkEntry> &links) {
+static bool ParseLinkEAValue(const uint8_t *data, size_t value_len, std::vector<LinkEntry> &links, bool read_names) {
 	links.clear();
 	if (!data || value_len < sizeof(LinkEAHeader)) {
 		return false;
@@ -2469,6 +2470,10 @@ static bool ParseLinkEAValue(const uint8_t *data, size_t value_len, std::vector<
 	// Verify magic
 	if (header.leh_magic != LINK_EA_MAGIC) {
 		return false;
+	}
+
+	if (links.capacity() < header.leh_reccount) {
+		links.reserve(header.leh_reccount);
 	}
 
 	// Skip header (24 bytes)
@@ -2489,15 +2494,20 @@ static bool ParseLinkEAValue(const uint8_t *data, size_t value_len, std::vector<
 		parent_fid.f_oid = ReadBE32(fid_ptr + 8);
 		parent_fid.f_ver = ReadBE32(fid_ptr + 12);
 
-		// Extract name (remaining bytes after FID), trimming trailing null bytes
-		size_t name_len = reclen - LINK_EA_MIN_ENTRY_SIZE;
-		const char *name_ptr = reinterpret_cast<const char *>(entry_ptr + LINK_EA_MIN_ENTRY_SIZE);
-		while (name_len > 0 && name_ptr[name_len - 1] == '\0') {
-			name_len--;
+		links.emplace_back();
+		auto &link = links.back();
+		link.parent_fid = parent_fid;
+		if (read_names) {
+			// Extract name (remaining bytes after FID), trimming trailing null bytes
+			size_t name_len = reclen - LINK_EA_MIN_ENTRY_SIZE;
+			const char *name_ptr = reinterpret_cast<const char *>(entry_ptr + LINK_EA_MIN_ENTRY_SIZE);
+			while (name_len > 0 && name_ptr[name_len - 1] == '\0') {
+				name_len--;
+			}
+			link.name.assign(name_ptr, name_len);
+		} else {
+			link.name.clear();
 		}
-		std::string name(name_ptr, name_len);
-
-		links.emplace_back(parent_fid, name);
 
 		// Move to next entry
 		entry_ptr += reclen;
@@ -2506,14 +2516,14 @@ static bool ParseLinkEAValue(const uint8_t *data, size_t value_len, std::vector<
 	return !links.empty();
 }
 
-bool MDTScanner::ParseBufferedLinkEA(std::vector<LinkEntry> &links) {
+bool MDTScanner::ParseBufferedLinkEA(std::vector<LinkEntry> &links, bool read_names) {
 	const uint8_t *value_ptr = nullptr;
 	size_t value_len = 0;
 	if (!ReadBufferedXattrValue(TRUSTED_XATTR_INDEX, "link", 4, value_ptr, value_len)) {
 		links.clear();
 		return false;
 	}
-	return ParseLinkEAValue(value_ptr, value_len, links);
+	return ParseLinkEAValue(value_ptr, value_len, links, read_names);
 }
 
 //===----------------------------------------------------------------------===//

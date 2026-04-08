@@ -276,6 +276,7 @@ static unique_ptr<GlobalTableFunctionState> LustreLinksInitGlobal(ClientContext 
 	gstate->device_paths = bind_data.device_paths;
 	gstate->column_ids = input.column_ids;
 	gstate->scan_config = bind_data.scan_config;
+	gstate->scan_config.read_link_names = ScanNeedsColumn(input, static_cast<idx_t>(LinkColumnIdx::NAME));
 	gstate->current_device_idx.store(0);
 	gstate->finished.store(false);
 	gstate->device_initialized.store(false);
@@ -540,7 +541,7 @@ static bool ExecuteExactFIDPath(LustreLinksGlobalState &gstate, LustreLinksLocal
 
 			LustreFID actual_fid;
 			std::vector<LinkEntry> links;
-			if (!lstate.scanner->ReadInodeLinkEA(entry.ino, actual_fid, links)) {
+			if (!lstate.scanner->ReadInodeLinkEA(entry.ino, actual_fid, links, gstate.scan_config.read_link_names)) {
 				continue;
 			}
 

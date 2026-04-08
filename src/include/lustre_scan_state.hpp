@@ -122,6 +122,9 @@ struct LustreQueryGlobalState : public GlobalTableFunctionState {
 //! Parse named parameters (skip_no_fid, skip_no_linkea) into scan_config
 void ParseNamedParameters(const named_parameter_map_t &named_parameters, MDTScanConfig &scan_config);
 
+//! Whether the scan must materialize a specific column, considering filters too.
+bool ScanNeedsColumn(const TableFunctionInitInput &input, idx_t actual_column_idx);
+
 //! Estimate cardinality by probing superblocks
 void EstimateCardinality(LustreQueryBindData &bind_data);
 
