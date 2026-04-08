@@ -9,6 +9,7 @@
 
 #include "lustre_dirmap.hpp"
 #include "lustre_link_selection.hpp"
+#include "lustre_output_string_cache.hpp"
 #include "mdt_scanner.hpp"
 
 #include "duckdb/common/exception.hpp"
@@ -144,25 +145,23 @@ static unique_ptr<LocalTableFunctionState> LustreDirMapInitLocal(ExecutionContex
 //===----------------------------------------------------------------------===//
 
 static void WriteDirMapRow(DataChunk &output, idx_t row_idx, const vector<idx_t> &column_ids,
-                           const LustreDirMapGlobalState::PendingRow &row) {
+                           const LustreDirMapGlobalState::PendingRow &row, LustreOutputStringCache &string_cache) {
 	for (idx_t i = 0; i < column_ids.size(); i++) {
 		auto &vec = output.data[i];
 		switch (column_ids[i]) {
 		case static_cast<idx_t>(DirMapColumnIdx::DIR_FID): {
-			auto fid_str = row.dir_fid.ToString();
-			FlatVector::GetData<string_t>(vec)[row_idx] = StringVector::AddString(vec, fid_str);
+			FlatVector::GetData<string_t>(vec)[row_idx] = string_cache.GetFID(vec, i, row.dir_fid);
 			break;
 		}
 		case static_cast<idx_t>(DirMapColumnIdx::PARENT_FID): {
-			auto fid_str = row.parent_fid.ToString();
-			FlatVector::GetData<string_t>(vec)[row_idx] = StringVector::AddString(vec, fid_str);
+			FlatVector::GetData<string_t>(vec)[row_idx] = string_cache.GetFID(vec, i, row.parent_fid);
 			break;
 		}
 		case static_cast<idx_t>(DirMapColumnIdx::DIR_DEVICE):
-			FlatVector::GetData<string_t>(vec)[row_idx] = StringVector::AddString(vec, row.dir_device);
+			FlatVector::GetData<string_t>(vec)[row_idx] = string_cache.GetString(vec, i, row.dir_device);
 			break;
 		case static_cast<idx_t>(DirMapColumnIdx::PARENT_DEVICE):
-			FlatVector::GetData<string_t>(vec)[row_idx] = StringVector::AddString(vec, row.parent_device);
+			FlatVector::GetData<string_t>(vec)[row_idx] = string_cache.GetString(vec, i, row.parent_device);
 			break;
 		case static_cast<idx_t>(DirMapColumnIdx::MASTER_MDT_INDEX):
 			FlatVector::GetData<uint32_t>(vec)[row_idx] = row.master_mdt_index;
@@ -180,7 +179,7 @@ static void WriteDirMapRow(DataChunk &output, idx_t row_idx, const vector<idx_t>
 			FlatVector::GetData<uint32_t>(vec)[row_idx] = row.layout_version;
 			break;
 		case static_cast<idx_t>(DirMapColumnIdx::SOURCE):
-			FlatVector::GetData<string_t>(vec)[row_idx] = StringVector::AddString(vec, row.source);
+			FlatVector::GetData<string_t>(vec)[row_idx] = string_cache.GetString(vec, i, row.source);
 			break;
 		case static_cast<idx_t>(DirMapColumnIdx::LMA_INCOMPAT):
 			FlatVector::GetData<uint32_t>(vec)[row_idx] = row.lma_incompat;
@@ -452,7 +451,7 @@ static bool MatchesDirMapFIDPredicate(const FIDOnlyFilter &filter, const LustreF
 //===----------------------------------------------------------------------===//
 
 static bool ExecuteExactFIDPath(LustreDirMapGlobalState &gstate, LustreDirMapLocalState &lstate,
-                                DataChunk &output, idx_t &output_count) {
+                                DataChunk &output, idx_t &output_count, LustreOutputStringCache &string_cache) {
 	auto &filter = *gstate.fid_filter;
 	const auto &current_device = lstate.initialized_device_path;
 	struct LookupEntry {
@@ -465,7 +464,7 @@ static bool ExecuteExactFIDPath(LustreDirMapGlobalState &gstate, LustreDirMapLoc
 		while (lstate.pending_results_idx < lstate.pending_results.size() &&
 		       output_count < STANDARD_VECTOR_SIZE) {
 			auto &row = lstate.pending_results[lstate.pending_results_idx];
-			WriteDirMapRow(output, output_count, gstate.column_ids, row);
+			WriteDirMapRow(output, output_count, gstate.column_ids, row, string_cache);
 			lstate.pending_results_idx++;
 			output_count++;
 		}
@@ -553,7 +552,7 @@ static bool ExecuteExactFIDPath(LustreDirMapGlobalState &gstate, LustreDirMapLoc
 //===----------------------------------------------------------------------===//
 
 static bool ExecuteSequentialPath(LustreDirMapGlobalState &gstate, LustreDirMapLocalState &lstate,
-                                  DataChunk &output, idx_t &output_count) {
+                                  DataChunk &output, idx_t &output_count, LustreOutputStringCache &string_cache) {
 	auto &filter = *gstate.fid_filter;
 	const auto &current_device = lstate.initialized_device_path;
 
@@ -561,7 +560,7 @@ static bool ExecuteSequentialPath(LustreDirMapGlobalState &gstate, LustreDirMapL
 		while (lstate.pending_results_idx < lstate.pending_results.size() &&
 		       output_count < STANDARD_VECTOR_SIZE) {
 			auto &row = lstate.pending_results[lstate.pending_results_idx];
-			WriteDirMapRow(output, output_count, gstate.column_ids, row);
+			WriteDirMapRow(output, output_count, gstate.column_ids, row, string_cache);
 			lstate.pending_results_idx++;
 			output_count++;
 		}
@@ -640,6 +639,7 @@ static void LustreDirMapExecute(ClientContext &context, TableFunctionInput &data
 	}
 
 	idx_t output_count = 0;
+	LustreOutputStringCache string_cache(gstate.column_ids.size());
 
 	while (output_count < STANDARD_VECTOR_SIZE) {
 		if (!EnsureDirMapLocalScanner(gstate, lstate, gstate.use_sequential_scan)) {
@@ -647,8 +647,8 @@ static void LustreDirMapExecute(ClientContext &context, TableFunctionInput &data
 		}
 
 		bool has_more = gstate.use_sequential_scan
-		    ? ExecuteSequentialPath(gstate, lstate, output, output_count)
-		    : ExecuteExactFIDPath(gstate, lstate, output, output_count);
+		    ? ExecuteSequentialPath(gstate, lstate, output, output_count, string_cache)
+		    : ExecuteExactFIDPath(gstate, lstate, output, output_count, string_cache);
 
 		if (!has_more) {
 			if (gstate.use_sequential_scan && gstate.active_block_groups.load() != 0) {

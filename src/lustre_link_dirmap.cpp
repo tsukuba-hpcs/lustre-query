@@ -9,6 +9,7 @@
 
 #include "lustre_link_dirmap.hpp"
 #include "lustre_link_selection.hpp"
+#include "lustre_output_string_cache.hpp"
 #include "lustre_types.hpp"
 #include "lustre_scan_state.hpp"
 #include "lustre_fid_filter.hpp"
@@ -280,31 +281,29 @@ static unique_ptr<LocalTableFunctionState> InitLocal(ExecutionContext &ctx, Tabl
 
 static void WriteRow(DataChunk &output, idx_t row, const vector<idx_t> &col_ids,
                      const LustreLink &link, const DirMapCacheEntry &dm,
-                     const string &device, bool dm_valid) {
+                     const string &device, bool dm_valid, LustreOutputStringCache &string_cache) {
     for (idx_t i = 0; i < col_ids.size(); i++) {
         auto &vec = output.data[i];
         switch (col_ids[i]) {
-        case 0: FlatVector::GetData<string_t>(vec)[row] = StringVector::AddString(vec, link.fid.ToString()); break;
-        case 1: FlatVector::GetData<string_t>(vec)[row] = StringVector::AddString(vec, link.parent_fid.ToString()); break;
+        case 0: FlatVector::GetData<string_t>(vec)[row] = string_cache.GetFID(vec, i, link.fid); break;
+        case 1: FlatVector::GetData<string_t>(vec)[row] = string_cache.GetFID(vec, i, link.parent_fid); break;
         case 2: FlatVector::GetData<string_t>(vec)[row] = StringVector::AddString(vec, link.name); break;
-        case 3: FlatVector::GetData<string_t>(vec)[row] = StringVector::AddString(vec, device); break;
+        case 3: FlatVector::GetData<string_t>(vec)[row] = string_cache.GetString(vec, i, device); break;
         case 4:
-            if (dm_valid) FlatVector::GetData<string_t>(vec)[row] = StringVector::AddString(vec, dm.dir_fid.ToString());
+            if (dm_valid) FlatVector::GetData<string_t>(vec)[row] = string_cache.GetFID(vec, i, dm.dir_fid);
             else FlatVector::SetNull(vec, row, true);
             break;
         case 5:
-            if (dm_valid) FlatVector::GetData<string_t>(vec)[row] = StringVector::AddString(vec, link.parent_fid.ToString());
+            if (dm_valid) FlatVector::GetData<string_t>(vec)[row] = string_cache.GetFID(vec, i, link.parent_fid);
             else FlatVector::SetNull(vec, row, true);
             break;
         case 6:
-            if (dm_valid) FlatVector::GetData<string_t>(vec)[row] = StringVector::AddString(vec, dm.dir_device);
+            if (dm_valid) FlatVector::GetData<string_t>(vec)[row] = string_cache.GetString(vec, i, dm.dir_device);
             else FlatVector::SetNull(vec, row, true);
             break;
         case 7:
             if (dm_valid) {
-                ext2_ino_t tmp; idx_t tmp2;
-                // parent_device = device where parent_fid lives = current scan device
-                FlatVector::GetData<string_t>(vec)[row] = StringVector::AddString(vec, device);
+                FlatVector::GetData<string_t>(vec)[row] = string_cache.GetString(vec, i, device);
             } else FlatVector::SetNull(vec, row, true);
             break;
         case 8: if (dm_valid) FlatVector::GetData<uint32_t>(vec)[row] = dm.master_mdt_index; else FlatVector::SetNull(vec, row, true); break;
@@ -313,7 +312,7 @@ static void WriteRow(DataChunk &output, idx_t row, const vector<idx_t> &col_ids,
         case 11: if (dm_valid) FlatVector::GetData<uint32_t>(vec)[row] = dm.hash_type; else FlatVector::SetNull(vec, row, true); break;
         case 12: if (dm_valid) FlatVector::GetData<uint32_t>(vec)[row] = dm.layout_version; else FlatVector::SetNull(vec, row, true); break;
         case 13:
-            if (dm_valid) FlatVector::GetData<string_t>(vec)[row] = StringVector::AddString(vec, dm.source);
+            if (dm_valid) FlatVector::GetData<string_t>(vec)[row] = string_cache.GetString(vec, i, dm.source);
             else FlatVector::SetNull(vec, row, true);
             break;
         default: break;
@@ -413,6 +412,7 @@ static void Execute(ClientContext &ctx, TableFunctionInput &data_p, DataChunk &o
     if (g.finished) { output.SetCardinality(0); return; }
 
     idx_t cnt = 0;
+    LustreOutputStringCache string_cache(g.column_ids.size());
     while (cnt < STANDARD_VECTOR_SIZE) {
         if (!EnsureScanner(g, l)) break;
 
@@ -445,7 +445,7 @@ static void Execute(ClientContext &ctx, TableFunctionInput &data_p, DataChunk &o
 
         DirMapCacheEntry dm;
         bool dm_valid = l.ResolveParentFID(link.parent_fid, dm);
-        WriteRow(output, cnt, g.column_ids, link, dm, l.initialized_device_path, dm_valid);
+        WriteRow(output, cnt, g.column_ids, link, dm, l.initialized_device_path, dm_valid, string_cache);
         cnt++;
     }
     output.SetCardinality(cnt);

@@ -8,6 +8,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "lustre_inode_dirmap.hpp"
+#include "lustre_output_string_cache.hpp"
 #include "lustre_types.hpp"
 #include "lustre_scan_state.hpp"
 #include "lustre_fid_filter.hpp"
@@ -213,11 +214,11 @@ static unique_ptr<LocalTableFunctionState> InitLocal(ExecutionContext &, TableFu
 //===----------------------------------------------------------------------===//
 
 static void WriteRow(DataChunk &output, idx_t row, const vector<idx_t> &cols,
-                     const InodeDirMapPendingRow &r, const string &dev) {
+                     const InodeDirMapPendingRow &r, const string &dev, LustreOutputStringCache &string_cache) {
     for (idx_t i = 0; i < cols.size(); i++) {
         auto &vec = output.data[i];
         switch (cols[i]) {
-        case 0: FlatVector::GetData<string_t>(vec)[row] = StringVector::AddString(vec, r.inode.fid.ToString()); break;
+        case 0: FlatVector::GetData<string_t>(vec)[row] = string_cache.GetFID(vec, i, r.inode.fid); break;
         case 1: FlatVector::GetData<uint64_t>(vec)[row] = r.inode.ino; break;
         case 2: FlatVector::GetData<string_t>(vec)[row] = StringVector::AddString(vec, FileTypeToString(r.inode.type)); break;
         case 3: FlatVector::GetData<uint32_t>(vec)[row] = r.inode.mode; break;
@@ -231,17 +232,17 @@ static void WriteRow(DataChunk &output, idx_t row, const vector<idx_t> &cols,
         case 11: FlatVector::GetData<timestamp_t>(vec)[row] = Timestamp::FromEpochSeconds(r.inode.ctime); break;
         case 12: FlatVector::GetData<uint32_t>(vec)[row] = r.inode.projid; break;
         case 13: FlatVector::GetData<uint32_t>(vec)[row] = r.inode.flags; break;
-        case 14: FlatVector::GetData<string_t>(vec)[row] = StringVector::AddString(vec, dev); break;
-        case 15: FlatVector::GetData<string_t>(vec)[row] = StringVector::AddString(vec, r.dir_fid.ToString()); break;
-        case 16: FlatVector::GetData<string_t>(vec)[row] = StringVector::AddString(vec, r.parent_fid.ToString()); break;
-        case 17: FlatVector::GetData<string_t>(vec)[row] = StringVector::AddString(vec, r.dir_device); break;
-        case 18: FlatVector::GetData<string_t>(vec)[row] = StringVector::AddString(vec, r.parent_device); break;
+        case 14: FlatVector::GetData<string_t>(vec)[row] = string_cache.GetString(vec, i, dev); break;
+        case 15: FlatVector::GetData<string_t>(vec)[row] = string_cache.GetFID(vec, i, r.dir_fid); break;
+        case 16: FlatVector::GetData<string_t>(vec)[row] = string_cache.GetFID(vec, i, r.parent_fid); break;
+        case 17: FlatVector::GetData<string_t>(vec)[row] = string_cache.GetString(vec, i, r.dir_device); break;
+        case 18: FlatVector::GetData<string_t>(vec)[row] = string_cache.GetString(vec, i, r.parent_device); break;
         case 19: FlatVector::GetData<uint32_t>(vec)[row] = r.master_mdt_index; break;
         case 20: FlatVector::GetData<uint32_t>(vec)[row] = r.stripe_index; break;
         case 21: FlatVector::GetData<uint32_t>(vec)[row] = r.stripe_count; break;
         case 22: FlatVector::GetData<uint32_t>(vec)[row] = r.hash_type; break;
         case 23: FlatVector::GetData<uint32_t>(vec)[row] = r.layout_version; break;
-        case 24: FlatVector::GetData<string_t>(vec)[row] = StringVector::AddString(vec, r.source); break;
+        case 24: FlatVector::GetData<string_t>(vec)[row] = string_cache.GetString(vec, i, r.source); break;
         default: break;
         }
     }
@@ -411,11 +412,12 @@ static void Execute(ClientContext &ctx, TableFunctionInput &data_p, DataChunk &o
 
     if (g.finished) { output.SetCardinality(0); return; }
     idx_t cnt = 0;
+    LustreOutputStringCache string_cache(g.column_ids.size());
 
     while (cnt < STANDARD_VECTOR_SIZE) {
         // Drain pending
         while (l.pending_idx < l.pending.size() && cnt < STANDARD_VECTOR_SIZE) {
-            WriteRow(output, cnt, g.column_ids, l.pending[l.pending_idx], l.initialized_device_path);
+            WriteRow(output, cnt, g.column_ids, l.pending[l.pending_idx], l.initialized_device_path, string_cache);
             l.pending_idx++;
             cnt++;
         }

@@ -27,11 +27,35 @@ struct LustreFID {
 	LustreFID() : f_seq(0), f_oid(0), f_ver(0) {}
 	LustreFID(uint64_t seq, uint32_t oid, uint32_t ver) : f_seq(seq), f_oid(oid), f_ver(ver) {}
 
+	static constexpr uint32_t MAX_STRING_LENGTH = 42;
+
+	uint32_t StringLength() const {
+		return 10 + HexDigitCount(f_seq) + HexDigitCount(f_oid) + HexDigitCount(f_ver);
+	}
+
+	char *WriteTo(char *target) const {
+		auto ptr = target;
+		*ptr++ = '[';
+		*ptr++ = '0';
+		*ptr++ = 'x';
+		ptr = WriteHex(ptr, ptr + 16, f_seq);
+		*ptr++ = ':';
+		*ptr++ = '0';
+		*ptr++ = 'x';
+		ptr = WriteHex(ptr, ptr + 8, f_oid);
+		*ptr++ = ':';
+		*ptr++ = '0';
+		*ptr++ = 'x';
+		ptr = WriteHex(ptr, ptr + 8, f_ver);
+		*ptr++ = ']';
+		return ptr;
+	}
+
 	std::string ToString() const {
-		char buf[64];
-		snprintf(buf, sizeof(buf), "[0x%" PRIx64 ":0x%" PRIx32 ":0x%" PRIx32 "]",
-		         f_seq, f_oid, f_ver);
-		return std::string(buf);
+		std::string result;
+		result.resize(StringLength());
+		WriteTo(&result[0]);
+		return result;
 	}
 
 	bool IsValid() const {
@@ -91,6 +115,40 @@ struct LustreFID {
 			return false;
 		}
 		return true;
+	}
+
+private:
+	template <class T>
+	static uint32_t HexDigitCount(T value) {
+		uint32_t digits = 1;
+		while (value >>= 4) {
+			digits++;
+		}
+		return digits;
+	}
+
+	template <class T>
+	static char *WriteHex(char *begin, char *end, T value) {
+		static constexpr char HEX_DIGITS[] = "0123456789abcdef";
+		char reversed[sizeof(T) * 2];
+		uint8_t count = 0;
+		do {
+			reversed[count++] = HEX_DIGITS[static_cast<uint8_t>(value & 0xF)];
+			value >>= 4;
+		} while (value != 0);
+		while (count > 0 && begin < end) {
+			*begin++ = reversed[--count];
+		}
+		return begin;
+	}
+};
+
+struct LustreFIDHash {
+	size_t operator()(const LustreFID &fid) const {
+		size_t h = std::hash<uint64_t> {}(fid.f_seq);
+		h ^= std::hash<uint32_t> {}(fid.f_oid) + 0x9e3779b9 + (h << 6) + (h >> 2);
+		h ^= std::hash<uint32_t> {}(fid.f_ver) + 0x9e3779b9 + (h << 6) + (h >> 2);
+		return h;
 	}
 };
 

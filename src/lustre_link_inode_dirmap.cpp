@@ -9,6 +9,7 @@
 
 #include "lustre_link_inode_dirmap.hpp"
 #include "lustre_link_selection.hpp"
+#include "lustre_output_string_cache.hpp"
 #include "lustre_types.hpp"
 #include "lustre_scan_state.hpp"
 #include "lustre_fid_filter.hpp"
@@ -366,28 +367,29 @@ static unique_ptr<LocalTableFunctionState> InitLocal(ExecutionContext &, TableFu
 static void WriteRow(DataChunk &output, idx_t row, const vector<idx_t> &cols,
                      const LustreLink &link, const DirMapCacheEntry &dm, bool dm_ok,
                      const LustreInode &dir_inode, bool inode_ok,
-                     const string &link_device, const string &inode_device) {
+                     const string &link_device, const string &inode_device,
+                     LustreOutputStringCache &string_cache) {
     for (idx_t i = 0; i < cols.size(); i++) {
         auto &vec = output.data[i];
         switch (cols[i]) {
         // Link columns 0-3
-        case 0: FlatVector::GetData<string_t>(vec)[row] = StringVector::AddString(vec, link.fid.ToString()); break;
-        case 1: FlatVector::GetData<string_t>(vec)[row] = StringVector::AddString(vec, link.parent_fid.ToString()); break;
+        case 0: FlatVector::GetData<string_t>(vec)[row] = string_cache.GetFID(vec, i, link.fid); break;
+        case 1: FlatVector::GetData<string_t>(vec)[row] = string_cache.GetFID(vec, i, link.parent_fid); break;
         case 2: FlatVector::GetData<string_t>(vec)[row] = StringVector::AddString(vec, link.name); break;
-        case 3: FlatVector::GetData<string_t>(vec)[row] = StringVector::AddString(vec, link_device); break;
+        case 3: FlatVector::GetData<string_t>(vec)[row] = string_cache.GetString(vec, i, link_device); break;
         // DirMap columns 4-13
-        case 4: if (dm_ok) FlatVector::GetData<string_t>(vec)[row] = StringVector::AddString(vec, dm.dir_fid.ToString()); else FlatVector::SetNull(vec, row, true); break;
-        case 5: if (dm_ok) FlatVector::GetData<string_t>(vec)[row] = StringVector::AddString(vec, link.parent_fid.ToString()); else FlatVector::SetNull(vec, row, true); break;
-        case 6: if (dm_ok) FlatVector::GetData<string_t>(vec)[row] = StringVector::AddString(vec, dm.dir_device); else FlatVector::SetNull(vec, row, true); break;
-        case 7: if (dm_ok) FlatVector::GetData<string_t>(vec)[row] = StringVector::AddString(vec, link_device); else FlatVector::SetNull(vec, row, true); break;
+        case 4: if (dm_ok) FlatVector::GetData<string_t>(vec)[row] = string_cache.GetFID(vec, i, dm.dir_fid); else FlatVector::SetNull(vec, row, true); break;
+        case 5: if (dm_ok) FlatVector::GetData<string_t>(vec)[row] = string_cache.GetFID(vec, i, link.parent_fid); else FlatVector::SetNull(vec, row, true); break;
+        case 6: if (dm_ok) FlatVector::GetData<string_t>(vec)[row] = string_cache.GetString(vec, i, dm.dir_device); else FlatVector::SetNull(vec, row, true); break;
+        case 7: if (dm_ok) FlatVector::GetData<string_t>(vec)[row] = string_cache.GetString(vec, i, link_device); else FlatVector::SetNull(vec, row, true); break;
         case 8: if (dm_ok) FlatVector::GetData<uint32_t>(vec)[row] = dm.master_mdt_index; else FlatVector::SetNull(vec, row, true); break;
         case 9: if (dm_ok) FlatVector::GetData<uint32_t>(vec)[row] = dm.stripe_index; else FlatVector::SetNull(vec, row, true); break;
         case 10: if (dm_ok) FlatVector::GetData<uint32_t>(vec)[row] = dm.stripe_count; else FlatVector::SetNull(vec, row, true); break;
         case 11: if (dm_ok) FlatVector::GetData<uint32_t>(vec)[row] = dm.hash_type; else FlatVector::SetNull(vec, row, true); break;
         case 12: if (dm_ok) FlatVector::GetData<uint32_t>(vec)[row] = dm.layout_version; else FlatVector::SetNull(vec, row, true); break;
-        case 13: if (dm_ok) FlatVector::GetData<string_t>(vec)[row] = StringVector::AddString(vec, dm.source); else FlatVector::SetNull(vec, row, true); break;
+        case 13: if (dm_ok) FlatVector::GetData<string_t>(vec)[row] = string_cache.GetString(vec, i, dm.source); else FlatVector::SetNull(vec, row, true); break;
         // Inode columns 14-28
-        case 14: if (inode_ok) FlatVector::GetData<string_t>(vec)[row] = StringVector::AddString(vec, dir_inode.fid.ToString()); else FlatVector::SetNull(vec, row, true); break;
+        case 14: if (inode_ok) FlatVector::GetData<string_t>(vec)[row] = string_cache.GetFID(vec, i, dir_inode.fid); else FlatVector::SetNull(vec, row, true); break;
         case 15: if (inode_ok) FlatVector::GetData<uint64_t>(vec)[row] = dir_inode.ino; else FlatVector::SetNull(vec, row, true); break;
         case 16: if (inode_ok) FlatVector::GetData<string_t>(vec)[row] = StringVector::AddString(vec, FileTypeToString(dir_inode.type)); else FlatVector::SetNull(vec, row, true); break;
         case 17: if (inode_ok) FlatVector::GetData<uint32_t>(vec)[row] = dir_inode.mode; else FlatVector::SetNull(vec, row, true); break;
@@ -401,7 +403,7 @@ static void WriteRow(DataChunk &output, idx_t row, const vector<idx_t> &cols,
         case 25: if (inode_ok) FlatVector::GetData<timestamp_t>(vec)[row] = Timestamp::FromEpochSeconds(dir_inode.ctime); else FlatVector::SetNull(vec, row, true); break;
         case 26: if (inode_ok) FlatVector::GetData<uint32_t>(vec)[row] = dir_inode.projid; else FlatVector::SetNull(vec, row, true); break;
         case 27: if (inode_ok) FlatVector::GetData<uint32_t>(vec)[row] = dir_inode.flags; else FlatVector::SetNull(vec, row, true); break;
-        case 28: if (inode_ok) FlatVector::GetData<string_t>(vec)[row] = StringVector::AddString(vec, inode_device); else FlatVector::SetNull(vec, row, true); break;
+        case 28: if (inode_ok) FlatVector::GetData<string_t>(vec)[row] = string_cache.GetString(vec, i, inode_device); else FlatVector::SetNull(vec, row, true); break;
         default: break;
         }
     }
@@ -497,6 +499,7 @@ static void Execute(ClientContext &ctx, TableFunctionInput &data_p, DataChunk &o
     if (g.finished) { output.SetCardinality(0); return; }
 
     idx_t cnt = 0;
+    LustreOutputStringCache string_cache(g.column_ids.size());
     while (cnt < STANDARD_VECTOR_SIZE) {
         if (!EnsureScanner(g, l)) break;
 
@@ -547,7 +550,7 @@ static void Execute(ClientContext &ctx, TableFunctionInput &data_p, DataChunk &o
         }
 
         WriteRow(output, cnt, g.column_ids, link, dm, dm_ok, dir_inode, inode_ok,
-                 l.initialized_device_path, inode_device);
+                 l.initialized_device_path, inode_device, string_cache);
         cnt++;
     }
     output.SetCardinality(cnt);
