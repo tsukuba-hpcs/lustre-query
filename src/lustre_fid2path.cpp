@@ -7,6 +7,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "lustre_fid2path.hpp"
+#include "lustre_link_selection.hpp"
 #include "lustre_types.hpp"
 #include "mdt_scanner.hpp"
 
@@ -24,6 +25,14 @@ namespace lustre {
 //===----------------------------------------------------------------------===//
 static const LustreFID ROOT_FID = {0x200000007ULL, 1, 0};
 static constexpr idx_t MAX_PATH_DEPTH = 4096;
+
+static const LinkEntry *SelectParentTraversalLink(const LustreFID &fid, const LustreLMV &lmv,
+                                                  const vector<LinkEntry> &links) {
+	if (lmv.IsSlave()) {
+		return SelectStripedSlaveParentLink(links, fid, lmv.lmv_master_mdt_index);
+	}
+	return SelectDirectoryParentLink(links);
+}
 
 //===----------------------------------------------------------------------===//
 // Bind Data - stores device paths (shared across threads)
@@ -122,7 +131,9 @@ static unique_ptr<FunctionLocalState> Fid2PathInitLocal(ExpressionState &state,
 
 static bool BuildPathFromLink(Fid2PathLocalState &lstate, const string &name, LustreFID parent_fid, string &path_out) {
 	vector<string> components;
-	components.push_back(name);
+	if (!name.empty()) {
+		components.push_back(name);
+	}
 
 	LustreFID current_fid = parent_fid;
 	idx_t depth = 0;
@@ -144,9 +155,20 @@ static bool BuildPathFromLink(Fid2PathLocalState &lstate, const string &name, Lu
 			return false;
 		}
 
-		// Directories cannot have hardlinks on Linux, so first entry is sufficient
-		components.push_back(links[0].name);
-		current_fid = links[0].parent_fid;
+		LustreLMV lmv;
+		lstate.scanners[scanner_idx]->ReadInodeLMV(ino, lmv);
+
+		auto *parent_link = SelectParentTraversalLink(current_fid, lmv, links);
+		if (!parent_link) {
+			return false;
+		}
+
+		// Slave stripes are implementation details. Follow their master link but
+		// do not expose the synthetic shard name as a path component.
+		if (!lmv.IsSlave()) {
+			components.push_back(parent_link->name);
+		}
+		current_fid = parent_link->parent_fid;
 	}
 
 	// Build path: reverse components and join with /
@@ -213,13 +235,27 @@ static void Fid2PathExecute(DataChunk &args, ExpressionState &state, Vector &res
 			continue;
 		}
 
+		LustreLMV lmv;
+		lstate.scanners[scanner_idx]->ReadInodeLMV(ino, lmv);
+
 		// Build a path for each link entry (hardlink)
 		bool any_success = false;
-		for (auto &link : links) {
-			string path;
-			if (BuildPathFromLink(lstate, link.name, link.parent_fid, path)) {
-				all_paths[i].push_back(std::move(path));
-				any_success = true;
+		if (lmv.IsSlave()) {
+			auto *parent_link = SelectParentTraversalLink(current_fid, lmv, links);
+			if (parent_link) {
+				string path;
+				if (BuildPathFromLink(lstate, string(), parent_link->parent_fid, path)) {
+					all_paths[i].push_back(std::move(path));
+					any_success = true;
+				}
+			}
+		} else {
+			for (auto &link : links) {
+				string path;
+				if (BuildPathFromLink(lstate, link.name, link.parent_fid, path)) {
+					all_paths[i].push_back(std::move(path));
+					any_success = true;
+				}
 			}
 		}
 

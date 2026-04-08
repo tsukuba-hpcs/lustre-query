@@ -8,6 +8,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "lustre_dirmap.hpp"
+#include "lustre_link_selection.hpp"
 #include "mdt_scanner.hpp"
 
 #include "duckdb/common/exception.hpp"
@@ -292,11 +293,15 @@ static void GenerateDirMapRows(const LustreFID &fid, const LustreLMV &lmv,
 		// Slave/shard: check if master is reachable on any scanned device.
 		// If yes, skip (the master will emit this shard's mapping).
 		LustreFID master_fid;
-		if (!links.empty()) {
-			master_fid = links[0].parent_fid;
+		if (auto *master_link = SelectStripedSlaveParentLink(links, fid, lmv.lmv_master_mdt_index)) {
+			master_fid = master_link->parent_fid;
 		}
 
 		if (master_fid.IsValid() && lstate.IsFIDReachable(master_fid)) {
+			return;
+		}
+
+		if (!master_fid.IsValid()) {
 			return;
 		}
 

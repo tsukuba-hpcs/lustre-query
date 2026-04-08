@@ -8,6 +8,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "lustre_link_inode_dirmap.hpp"
+#include "lustre_link_selection.hpp"
 #include "lustre_types.hpp"
 #include "lustre_scan_state.hpp"
 #include "lustre_fid_filter.hpp"
@@ -237,14 +238,17 @@ struct LIDLocalState : public LocalTableFunctionState {
             LustreFID link_fid;
             std::vector<LinkEntry> links;
             resolve_scanner->ReadInodeLinkEA(ino, link_fid, links);
-            if (!links.empty()) {
-                entry.dir_fid = links[0].parent_fid;
-                ext2_ino_t dir_ino; idx_t dir_sidx;
-                if (LookupFIDCrossMDT(g, entry.dir_fid, dir_ino, dir_sidx))
-                    entry.dir_device = g.device_paths[dir_sidx];
-                else
-                    entry.dir_device.clear();
+            auto *master_link = SelectStripedSlaveParentLink(links, parent_fid, lmv.lmv_master_mdt_index);
+            if (!master_link) {
+                return false;
             }
+
+            entry.dir_fid = master_link->parent_fid;
+            ext2_ino_t dir_ino; idx_t dir_sidx;
+            if (LookupFIDCrossMDT(g, entry.dir_fid, dir_ino, dir_sidx))
+                entry.dir_device = g.device_paths[dir_sidx];
+            else
+                entry.dir_device.clear();
             entry.source = "slave";
             entry.stripe_index = lmv.lmv_master_mdt_index;
             entry.stripe_count = lmv.lmv_stripe_count;
