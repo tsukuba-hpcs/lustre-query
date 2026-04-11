@@ -28,34 +28,25 @@ static constexpr idx_t OBJECT_SEQ_SCAN_THRESHOLD = 8192;
 // Column Definitions
 //===----------------------------------------------------------------------===//
 
-static const vector<string> OBJECT_COLUMN_NAMES = {
-    "fid",
-    "comp_index",
-    "stripe_index",
-    "ost_idx",
-    "ost_oi_id",
-    "ost_oi_seq",
-    "device"
-};
+static const vector<string> OBJECT_COLUMN_NAMES = {"fid",       "comp_index", "stripe_index", "ost_idx",
+                                                   "ost_oi_id", "ost_oi_seq", "device"};
 
 static const vector<LogicalType> OBJECT_COLUMN_TYPES = {
-    LogicalType::VARCHAR,    // fid
-    LogicalType::UINTEGER,   // comp_index
-    LogicalType::UINTEGER,   // stripe_index
-    LogicalType::UINTEGER,   // ost_idx
-    LogicalType::UBIGINT,    // ost_oi_id
-    LogicalType::UBIGINT,    // ost_oi_seq
-    LogicalType::VARCHAR     // device
+    LogicalType::VARCHAR,  // fid
+    LogicalType::UINTEGER, // comp_index
+    LogicalType::UINTEGER, // stripe_index
+    LogicalType::UINTEGER, // ost_idx
+    LogicalType::UBIGINT,  // ost_oi_id
+    LogicalType::UBIGINT,  // ost_oi_seq
+    LogicalType::VARCHAR   // device
 };
 
 //===----------------------------------------------------------------------===//
 // Bind Functions
 //===----------------------------------------------------------------------===//
 
-static unique_ptr<FunctionData> LustreObjectsBindSingle(ClientContext &context,
-                                                        TableFunctionBindInput &input,
-                                                        vector<LogicalType> &return_types,
-                                                        vector<string> &names) {
+static unique_ptr<FunctionData> LustreObjectsBindSingle(ClientContext &context, TableFunctionBindInput &input,
+                                                        vector<LogicalType> &return_types, vector<string> &names) {
 	auto result = make_uniq<LustreQueryBindData>();
 	result->device_paths.push_back(StringValue::Get(input.inputs[0]));
 	ParseNamedParameters(input.named_parameters, result->scan_config);
@@ -64,10 +55,8 @@ static unique_ptr<FunctionData> LustreObjectsBindSingle(ClientContext &context,
 	return std::move(result);
 }
 
-static unique_ptr<FunctionData> LustreObjectsBindMulti(ClientContext &context,
-                                                       TableFunctionBindInput &input,
-                                                       vector<LogicalType> &return_types,
-                                                       vector<string> &names) {
+static unique_ptr<FunctionData> LustreObjectsBindMulti(ClientContext &context, TableFunctionBindInput &input,
+                                                       vector<LogicalType> &return_types, vector<string> &names) {
 	auto result = make_uniq<LustreQueryBindData>();
 	auto &list_values = ListValue::GetChildren(input.inputs[0]);
 	for (auto &val : list_values) {
@@ -87,7 +76,7 @@ static unique_ptr<FunctionData> LustreObjectsBindMulti(ClientContext &context,
 //===----------------------------------------------------------------------===//
 
 static unique_ptr<GlobalTableFunctionState> LustreObjectsInitGlobal(ClientContext &context,
-                                                                     TableFunctionInitInput &input) {
+                                                                    TableFunctionInitInput &input) {
 	auto &bind_data = input.bind_data->Cast<LustreQueryBindData>();
 
 	auto gstate = make_uniq<LustreObjectsGlobalState>();
@@ -104,12 +93,11 @@ static unique_ptr<GlobalTableFunctionState> LustreObjectsInitGlobal(ClientContex
 	// Set thread count from scheduler
 	gstate->thread_count = NumericCast<idx_t>(TaskScheduler::GetScheduler(context).NumberOfThreads());
 
-	gstate->fid_filter = FIDOnlyFilter::Create(input.filters.get(), input.column_ids,
-	                                           static_cast<idx_t>(ObjectColumnIdx::FID));
-	gstate->use_sequential_scan = gstate->fid_filter &&
-		(gstate->fid_filter->RequiresGenericEvaluation() ||
-		 !gstate->fid_filter->HasFIDFilter() ||
-		 gstate->fid_filter->fid_values.size() > OBJECT_SEQ_SCAN_THRESHOLD);
+	gstate->fid_filter =
+	    FIDOnlyFilter::Create(input.filters.get(), input.column_ids, static_cast<idx_t>(ObjectColumnIdx::FID));
+	gstate->use_sequential_scan =
+	    gstate->fid_filter && (gstate->fid_filter->RequiresGenericEvaluation() || !gstate->fid_filter->HasFIDFilter() ||
+	                           gstate->fid_filter->fid_values.size() > OBJECT_SEQ_SCAN_THRESHOLD);
 	if (gstate->use_sequential_scan && !gstate->device_paths.empty()) {
 		MDTScanner probe;
 		probe.Open(gstate->device_paths[0]);
@@ -124,8 +112,8 @@ static unique_ptr<GlobalTableFunctionState> LustreObjectsInitGlobal(ClientContex
 }
 
 static unique_ptr<LocalTableFunctionState> LustreObjectsInitLocal(ExecutionContext &context,
-                                                                   TableFunctionInitInput &input,
-                                                                   GlobalTableFunctionState *global_state) {
+                                                                  TableFunctionInitInput &input,
+                                                                  GlobalTableFunctionState *global_state) {
 	return make_uniq<LustreObjectsLocalState>();
 }
 
@@ -133,9 +121,8 @@ static unique_ptr<LocalTableFunctionState> LustreObjectsInitLocal(ExecutionConte
 // Helper: Write an object output row
 //===----------------------------------------------------------------------===//
 
-static void WriteObjectRow(DataChunk &output, idx_t row_idx, const vector<idx_t> &column_ids,
-                           const LustreFID &fid, const LustreOSTObject &obj,
-                           const string &device_path) {
+static void WriteObjectRow(DataChunk &output, idx_t row_idx, const vector<idx_t> &column_ids, const LustreFID &fid,
+                           const LustreOSTObject &obj, const string &device_path) {
 	for (idx_t i = 0; i < column_ids.size(); i++) {
 		auto &vec = output.data[i];
 		switch (column_ids[i]) {
@@ -292,8 +279,8 @@ static bool MatchesObjectFIDPredicate(const FIDOnlyFilter &filter, const LustreF
 // FID Path: batched lookup by fid → OI → inode → LOV → object rows
 //===----------------------------------------------------------------------===//
 
-static bool ExecuteExactFIDPath(LustreObjectsGlobalState &gstate, LustreObjectsLocalState &lstate,
-                                DataChunk &output, idx_t &output_count) {
+static bool ExecuteExactFIDPath(LustreObjectsGlobalState &gstate, LustreObjectsLocalState &lstate, DataChunk &output,
+                                idx_t &output_count) {
 	auto &filter = *gstate.fid_filter;
 	const auto &current_device = lstate.initialized_device_path;
 	struct LookupEntry {
@@ -303,11 +290,9 @@ static bool ExecuteExactFIDPath(LustreObjectsGlobalState &gstate, LustreObjectsL
 
 	while (output_count < STANDARD_VECTOR_SIZE) {
 		// Drain pending results first
-		while (lstate.pending_results_idx < lstate.pending_results.size() &&
-		       output_count < STANDARD_VECTOR_SIZE) {
+		while (lstate.pending_results_idx < lstate.pending_results.size() && output_count < STANDARD_VECTOR_SIZE) {
 			auto &row = lstate.pending_results[lstate.pending_results_idx];
-			WriteObjectRow(output, output_count, gstate.column_ids,
-			               row.fid, row.object, current_device);
+			WriteObjectRow(output, output_count, gstate.column_ids, row.fid, row.object, current_device);
 			lstate.pending_results_idx++;
 			output_count++;
 		}
@@ -378,14 +363,13 @@ static bool ExecuteExactFIDPath(LustreObjectsGlobalState &gstate, LustreObjectsL
 // Sequential Scan Path - linear scan by block group
 //===----------------------------------------------------------------------===//
 
-static bool ExecuteSequentialPath(LustreObjectsGlobalState &gstate, LustreObjectsLocalState &lstate,
-                                  DataChunk &output, idx_t &output_count) {
+static bool ExecuteSequentialPath(LustreObjectsGlobalState &gstate, LustreObjectsLocalState &lstate, DataChunk &output,
+                                  idx_t &output_count) {
 	auto &filter = *gstate.fid_filter;
 	const auto &current_device = lstate.initialized_device_path;
 
 	while (output_count < STANDARD_VECTOR_SIZE) {
-		while (lstate.pending_results_idx < lstate.pending_results.size() &&
-		       output_count < STANDARD_VECTOR_SIZE) {
+		while (lstate.pending_results_idx < lstate.pending_results.size() && output_count < STANDARD_VECTOR_SIZE) {
 			auto &row = lstate.pending_results[lstate.pending_results_idx];
 			WriteObjectRow(output, output_count, gstate.column_ids, row.fid, row.object, current_device);
 			lstate.pending_results_idx++;
@@ -431,17 +415,16 @@ static bool ExecuteSequentialPath(LustreObjectsGlobalState &gstate, LustreObject
 // Execute Function
 //===----------------------------------------------------------------------===//
 
-static void LustreObjectsExecute(ClientContext &context, TableFunctionInput &data_p,
-                                  DataChunk &output) {
+static void LustreObjectsExecute(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
 	auto &gstate = data_p.global_state->Cast<LustreObjectsGlobalState>();
 	auto &lstate = data_p.local_state->Cast<LustreObjectsLocalState>();
 
 	if (gstate.fid_filter->HasDynamicFilter()) {
 		bool changed = gstate.fid_filter->ResolveDynamicFilters();
 		if (changed) {
-			gstate.use_sequential_scan =
-			    gstate.fid_filter->RequiresGenericEvaluation() || !gstate.fid_filter->HasFIDFilter() ||
-			    gstate.fid_filter->fid_values.size() > OBJECT_SEQ_SCAN_THRESHOLD;
+			gstate.use_sequential_scan = gstate.fid_filter->RequiresGenericEvaluation() ||
+			                             !gstate.fid_filter->HasFIDFilter() ||
+			                             gstate.fid_filter->fid_values.size() > OBJECT_SEQ_SCAN_THRESHOLD;
 			gstate.finished = false;
 			gstate.next_fid_idx.store(0);
 			gstate.next_block_group.store(0);
@@ -468,9 +451,8 @@ static void LustreObjectsExecute(ClientContext &context, TableFunctionInput &dat
 			break;
 		}
 
-		bool has_more = gstate.use_sequential_scan
-		    ? ExecuteSequentialPath(gstate, lstate, output, output_count)
-		    : ExecuteExactFIDPath(gstate, lstate, output, output_count);
+		bool has_more = gstate.use_sequential_scan ? ExecuteSequentialPath(gstate, lstate, output, output_count)
+		                                           : ExecuteExactFIDPath(gstate, lstate, output, output_count);
 
 		if (!has_more) {
 			if (gstate.use_sequential_scan && gstate.active_block_groups.load() != 0) {
@@ -479,9 +461,8 @@ static void LustreObjectsExecute(ClientContext &context, TableFunctionInput &dat
 			lock_guard<mutex> lock(gstate.device_transition_lock);
 			idx_t current_dev = gstate.current_device_idx.load();
 			if (lstate.initialized_device_idx == current_dev &&
-			    (!gstate.use_sequential_scan ||
-			     (gstate.next_block_group.load() >= gstate.total_block_groups &&
-			      gstate.active_block_groups.load() == 0))) {
+			    (!gstate.use_sequential_scan || (gstate.next_block_group.load() >= gstate.total_block_groups &&
+			                                     gstate.active_block_groups.load() == 0))) {
 				gstate.device_initialized.store(false);
 				gstate.current_device_idx++;
 				gstate.next_fid_idx.store(0);
@@ -505,8 +486,7 @@ static void LustreObjectsExecute(ClientContext &context, TableFunctionInput &dat
 // Cardinality Function
 //===----------------------------------------------------------------------===//
 
-static unique_ptr<NodeStatistics> LustreObjectsCardinality(ClientContext &context,
-                                                            const FunctionData *bind_data_p) {
+static unique_ptr<NodeStatistics> LustreObjectsCardinality(ClientContext &context, const FunctionData *bind_data_p) {
 	return make_uniq<NodeStatistics>(1000000000000);
 }
 
@@ -525,8 +505,8 @@ static void SetObjectCommonProperties(TableFunction &func) {
 TableFunctionSet LustreObjectsFunction::GetFunctionSet() {
 	TableFunctionSet set("lustre_objects");
 
-	TableFunction single_func("lustre_objects", {LogicalType::VARCHAR}, LustreObjectsExecute,
-	                          LustreObjectsBindSingle, LustreObjectsInitGlobal, LustreObjectsInitLocal);
+	TableFunction single_func("lustre_objects", {LogicalType::VARCHAR}, LustreObjectsExecute, LustreObjectsBindSingle,
+	                          LustreObjectsInitGlobal, LustreObjectsInitLocal);
 	SetObjectCommonProperties(single_func);
 	set.AddFunction(std::move(single_func));
 

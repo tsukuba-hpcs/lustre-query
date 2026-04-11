@@ -20,12 +20,14 @@ namespace lustre {
 // Lustre FID (File Identifier) - 128-bit unique identifier
 //===----------------------------------------------------------------------===//
 struct LustreFID {
-	uint64_t f_seq;  // Sequence number
-	uint32_t f_oid;  // Object ID
-	uint32_t f_ver;  // Version
+	uint64_t f_seq; // Sequence number
+	uint32_t f_oid; // Object ID
+	uint32_t f_ver; // Version
 
-	LustreFID() : f_seq(0), f_oid(0), f_ver(0) {}
-	LustreFID(uint64_t seq, uint32_t oid, uint32_t ver) : f_seq(seq), f_oid(oid), f_ver(ver) {}
+	LustreFID() : f_seq(0), f_oid(0), f_ver(0) {
+	}
+	LustreFID(uint64_t seq, uint32_t oid, uint32_t ver) : f_seq(seq), f_oid(oid), f_ver(ver) {
+	}
 
 	static constexpr uint32_t MAX_STRING_LENGTH = 42;
 
@@ -156,20 +158,20 @@ struct LustreFIDHash {
 // Lustre Metadata Attributes (LMA) - stored in trusted.lma xattr
 //===----------------------------------------------------------------------===//
 struct LustreLMA {
-	uint32_t lma_compat;      // Compatible flags
-	uint32_t lma_incompat;    // Incompatible flags
-	LustreFID lma_self_fid;   // Self FID
+	uint32_t lma_compat;    // Compatible flags
+	uint32_t lma_incompat;  // Incompatible flags
+	LustreFID lma_self_fid; // Self FID
 };
 
 // LMA magic and flags
 constexpr uint32_t LUSTRE_LMA_MAGIC = 0x0BD30BD0;
 
 // LMA incompat flags (from lma_incompat field)
-constexpr uint32_t LMAI_RELEASED       = 0x00000001;  // File is released (HSM)
-constexpr uint32_t LMAI_AGENT          = 0x00000002;  // Agent inode (DNE1 remote dir stub)
-constexpr uint32_t LMAI_REMOTE_PARENT  = 0x00000004;  // Parent is on a remote MDT
-constexpr uint32_t LMAI_STRIPED        = 0x00000008;  // Striped directory (DNE2)
-constexpr uint32_t LMAI_ORPHAN         = 0x00000010;  // Orphan inode
+constexpr uint32_t LMAI_RELEASED = 0x00000001;      // File is released (HSM)
+constexpr uint32_t LMAI_AGENT = 0x00000002;         // Agent inode (DNE1 remote dir stub)
+constexpr uint32_t LMAI_REMOTE_PARENT = 0x00000004; // Parent is on a remote MDT
+constexpr uint32_t LMAI_STRIPED = 0x00000008;       // Striped directory (DNE2)
+constexpr uint32_t LMAI_ORPHAN = 0x00000010;        // Orphan inode
 
 //===----------------------------------------------------------------------===//
 // LOV (Lustre Object Volume) - stripe information
@@ -183,7 +185,7 @@ struct LustreLOV {
 	uint16_t lmm_stripe_count; // Number of stripes
 	uint16_t lmm_layout_gen;   // Layout generation
 	// Pool name follows in V3
-	char lmm_pool_name[16];    // OST pool name (LOV_MAGIC_V3)
+	char lmm_pool_name[16]; // OST pool name (LOV_MAGIC_V3)
 };
 
 // LOV magic numbers
@@ -206,40 +208,49 @@ constexpr uint32_t MIRROR_ID_MASK = 0x7FFF0000;
 //===----------------------------------------------------------------------===//
 
 // LMV magic numbers
-constexpr uint32_t LMV_MAGIC_V1     = 0x0CD20CD0;  // Master striped directory
-constexpr uint32_t LMV_MAGIC_STRIPE = 0x0CD40CD0;  // Slave/shard of striped directory
+constexpr uint32_t LMV_MAGIC_V1 = 0x0CD20CD0;     // Master striped directory
+constexpr uint32_t LMV_MAGIC_STRIPE = 0x0CD40CD0; // Slave/shard of striped directory
 
 // LMV hash type flags (upper 16 bits of lmv_hash_type)
 constexpr uint32_t LMV_HASH_FLAG_MIGRATION = 0x80000000;
-constexpr uint32_t LMV_HASH_FLAG_SPLIT     = 0x08000000;
-constexpr uint32_t LMV_HASH_FLAG_MERGE     = 0x04000000;
-constexpr uint32_t LMV_HASH_TYPE_MASK      = 0x0000FFFF;
+constexpr uint32_t LMV_HASH_FLAG_SPLIT = 0x08000000;
+constexpr uint32_t LMV_HASH_FLAG_MERGE = 0x04000000;
+constexpr uint32_t LMV_HASH_TYPE_MASK = 0x0000FFFF;
 
 // LMV on-disk header size (without variable-length FID array)
-constexpr size_t LMV_HEADER_SIZE    = 56;
+constexpr size_t LMV_HEADER_SIZE = 56;
 
 // Pool name size (LOV_MAXPOOLNAME + 1 including null)
 constexpr size_t LMV_POOL_NAME_SIZE = 16;
 
 struct LustreLMV {
-	uint32_t lmv_magic;              // LMV_MAGIC_V1 or LMV_MAGIC_STRIPE
-	uint32_t lmv_stripe_count;       // Number of stripes
-	uint32_t lmv_master_mdt_index;   // Master: MDT index, Slave: stripe index
-	uint32_t lmv_hash_type;          // Hash type + flags
+	uint32_t lmv_magic;            // LMV_MAGIC_V1 or LMV_MAGIC_STRIPE
+	uint32_t lmv_stripe_count;     // Number of stripes
+	uint32_t lmv_master_mdt_index; // Master: MDT index, Slave: stripe index
+	uint32_t lmv_hash_type;        // Hash type + flags
 	uint32_t lmv_layout_version;
 	uint32_t lmv_migrate_offset;
 	uint32_t lmv_migrate_hash;
 	std::string lmv_pool_name;
 
-	LustreLMV() : lmv_magic(0), lmv_stripe_count(0), lmv_master_mdt_index(0),
-	              lmv_hash_type(0), lmv_layout_version(0), lmv_migrate_offset(0),
-	              lmv_migrate_hash(0) {}
+	LustreLMV()
+	    : lmv_magic(0), lmv_stripe_count(0), lmv_master_mdt_index(0), lmv_hash_type(0), lmv_layout_version(0),
+	      lmv_migrate_offset(0), lmv_migrate_hash(0) {
+	}
 
-	bool IsMaster() const { return lmv_magic == LMV_MAGIC_V1; }
-	bool IsSlave() const  { return lmv_magic == LMV_MAGIC_STRIPE; }
-	bool IsValid() const  { return IsMaster() || IsSlave(); }
+	bool IsMaster() const {
+		return lmv_magic == LMV_MAGIC_V1;
+	}
+	bool IsSlave() const {
+		return lmv_magic == LMV_MAGIC_STRIPE;
+	}
+	bool IsValid() const {
+		return IsMaster() || IsSlave();
+	}
 
-	uint32_t HashType() const { return lmv_hash_type & LMV_HASH_TYPE_MASK; }
+	uint32_t HashType() const {
+		return lmv_hash_type & LMV_HASH_TYPE_MASK;
+	}
 	bool IsLayoutChanging() const {
 		return (lmv_hash_type & (LMV_HASH_FLAG_MIGRATION | LMV_HASH_FLAG_SPLIT | LMV_HASH_FLAG_MERGE)) != 0;
 	}
@@ -249,10 +260,10 @@ struct LustreLMV {
 // SOM (Size on MDS) - stored in trusted.som xattr
 //===----------------------------------------------------------------------===//
 struct LustreSOM {
-	uint16_t lsa_valid;         // SOM flags
-	uint16_t lsa_reserved[3];   // Reserved
-	uint64_t lsa_size;          // File size
-	uint64_t lsa_blocks;        // Block count
+	uint16_t lsa_valid;       // SOM flags
+	uint16_t lsa_reserved[3]; // Reserved
+	uint64_t lsa_size;        // File size
+	uint64_t lsa_blocks;      // Block count
 };
 
 //===----------------------------------------------------------------------===//
@@ -271,27 +282,43 @@ enum class FileType : uint8_t {
 
 inline FileType ModeToFileType(uint16_t mode) {
 	switch (mode & 0xF000) {
-	case 0x8000: return FileType::REGULAR;    // S_IFREG
-	case 0x4000: return FileType::DIRECTORY;  // S_IFDIR
-	case 0xA000: return FileType::SYMLINK;    // S_IFLNK
-	case 0x6000: return FileType::BLOCK_DEV;  // S_IFBLK
-	case 0x2000: return FileType::CHAR_DEV;   // S_IFCHR
-	case 0x1000: return FileType::FIFO;       // S_IFIFO
-	case 0xC000: return FileType::SOCKET;     // S_IFSOCK
-	default:     return FileType::UNKNOWN;
+	case 0x8000:
+		return FileType::REGULAR; // S_IFREG
+	case 0x4000:
+		return FileType::DIRECTORY; // S_IFDIR
+	case 0xA000:
+		return FileType::SYMLINK; // S_IFLNK
+	case 0x6000:
+		return FileType::BLOCK_DEV; // S_IFBLK
+	case 0x2000:
+		return FileType::CHAR_DEV; // S_IFCHR
+	case 0x1000:
+		return FileType::FIFO; // S_IFIFO
+	case 0xC000:
+		return FileType::SOCKET; // S_IFSOCK
+	default:
+		return FileType::UNKNOWN;
 	}
 }
 
-inline const char* FileTypeToString(FileType type) {
+inline const char *FileTypeToString(FileType type) {
 	switch (type) {
-	case FileType::REGULAR:   return "file";
-	case FileType::DIRECTORY: return "dir";
-	case FileType::SYMLINK:   return "link";
-	case FileType::BLOCK_DEV: return "blk";
-	case FileType::CHAR_DEV:  return "chr";
-	case FileType::FIFO:      return "fifo";
-	case FileType::SOCKET:    return "sock";
-	default:                  return "unknown";
+	case FileType::REGULAR:
+		return "file";
+	case FileType::DIRECTORY:
+		return "dir";
+	case FileType::SYMLINK:
+		return "link";
+	case FileType::BLOCK_DEV:
+		return "blk";
+	case FileType::CHAR_DEV:
+		return "chr";
+	case FileType::FIFO:
+		return "fifo";
+	case FileType::SOCKET:
+		return "sock";
+	default:
+		return "unknown";
 	}
 }
 
@@ -302,19 +329,19 @@ inline const char* FileTypeToString(FileType type) {
 
 // LinkEA magic number and layout constants
 constexpr uint32_t LINK_EA_MAGIC = 0x11EAF1DF;
-constexpr size_t LINK_EA_RECLEN_SIZE = 2;       // lee_reclen field size (big-endian uint16)
-constexpr size_t LINK_EA_FID_SIZE = 16;          // lee_parent_fid field size
+constexpr size_t LINK_EA_RECLEN_SIZE = 2; // lee_reclen field size (big-endian uint16)
+constexpr size_t LINK_EA_FID_SIZE = 16;   // lee_parent_fid field size
 constexpr size_t LINK_EA_MIN_ENTRY_SIZE = LINK_EA_RECLEN_SIZE + LINK_EA_FID_SIZE; // 18 bytes
 
 // LMA layout constants
-constexpr size_t LMA_FID_OFFSET = 8;            // Offset of FID within LMA (after lma_compat + lma_incompat)
+constexpr size_t LMA_FID_OFFSET = 8; // Offset of FID within LMA (after lma_compat + lma_incompat)
 
 struct LinkEAHeader {
-	uint32_t leh_magic;           // Magic number (LINK_EA_MAGIC)
-	uint32_t leh_reccount;        // Number of entries (link count)
-	uint64_t leh_len;             // Total size in bytes
-	uint32_t leh_overflow_time;   // Overflow timestamp
-	uint32_t leh_padding;         // Padding
+	uint32_t leh_magic;         // Magic number (LINK_EA_MAGIC)
+	uint32_t leh_reccount;      // Number of entries (link count)
+	uint64_t leh_len;           // Total size in bytes
+	uint32_t leh_overflow_time; // Overflow timestamp
+	uint32_t leh_padding;       // Padding
 };
 
 // LinkEA entry is packed and variable-length
@@ -326,21 +353,21 @@ struct LinkEAHeader {
 
 // Parsed link entry
 struct LinkEntry {
-	LustreFID parent_fid;   // Parent directory FID
-	std::string name;       // File name in parent directory
+	LustreFID parent_fid; // Parent directory FID
+	std::string name;     // File name in parent directory
 
 	LinkEntry() = default;
-	LinkEntry(const LustreFID &fid, const std::string &n)
-	    : parent_fid(fid), name(n) {}
+	LinkEntry(const LustreFID &fid, const std::string &n) : parent_fid(fid), name(n) {
+	}
 };
 
 //===----------------------------------------------------------------------===//
 // Lustre Link - a single (fid, parent_fid, name) row for lustre_links output
 //===----------------------------------------------------------------------===//
 struct LustreLink {
-	LustreFID fid;         // Inode's FID
-	LustreFID parent_fid;  // Parent directory FID
-	std::string name;      // File name in parent directory
+	LustreFID fid;        // Inode's FID
+	LustreFID parent_fid; // Parent directory FID
+	std::string name;     // File name in parent directory
 };
 
 //===----------------------------------------------------------------------===//
@@ -348,39 +375,41 @@ struct LustreLink {
 // or a single entry for simple V1/V3 layouts
 //===----------------------------------------------------------------------===//
 struct LustreLayoutComponent {
-	uint32_t comp_index;       // 0-based component index
-	uint32_t comp_id;          // lcme_id (0 for non-composite)
-	uint16_t mirror_id;        // (lcme_id & MIRROR_ID_MASK) >> MIRROR_ID_SHIFT
-	uint32_t comp_flags;       // lcme_flags (0 for non-composite)
-	uint64_t extent_start;     // Byte offset start (0 for non-composite)
-	uint64_t extent_end;       // Byte offset end (LUSTRE_EOF for non-composite)
-	uint32_t pattern;          // lmm_pattern (RAID0, MDT, etc.)
-	uint32_t stripe_size;      // lmm_stripe_size in bytes
-	uint16_t stripe_count;     // lmm_stripe_count
-	uint16_t stripe_offset;    // First OST index from objects, or 0xFFFF if unknown
-	std::string pool_name;     // OST pool name (V3 only)
-	uint8_t  dstripe_count;    // EC data stripe count (k)
-	uint8_t  cstripe_count;    // EC code stripe count (p)
-	uint8_t  compr_type;       // Compression type
-	uint8_t  compr_lvl;        // Compression level (4 bits)
+	uint32_t comp_index;    // 0-based component index
+	uint32_t comp_id;       // lcme_id (0 for non-composite)
+	uint16_t mirror_id;     // (lcme_id & MIRROR_ID_MASK) >> MIRROR_ID_SHIFT
+	uint32_t comp_flags;    // lcme_flags (0 for non-composite)
+	uint64_t extent_start;  // Byte offset start (0 for non-composite)
+	uint64_t extent_end;    // Byte offset end (LUSTRE_EOF for non-composite)
+	uint32_t pattern;       // lmm_pattern (RAID0, MDT, etc.)
+	uint32_t stripe_size;   // lmm_stripe_size in bytes
+	uint16_t stripe_count;  // lmm_stripe_count
+	uint16_t stripe_offset; // First OST index from objects, or 0xFFFF if unknown
+	std::string pool_name;  // OST pool name (V3 only)
+	uint8_t dstripe_count;  // EC data stripe count (k)
+	uint8_t cstripe_count;  // EC code stripe count (p)
+	uint8_t compr_type;     // Compression type
+	uint8_t compr_lvl;      // Compression level (4 bits)
 
-	LustreLayoutComponent() : comp_index(0), comp_id(0), mirror_id(0), comp_flags(0),
-	                          extent_start(0), extent_end(LUSTRE_EOF), pattern(0),
-	                          stripe_size(0), stripe_count(0), stripe_offset(0xFFFF),
-	                          dstripe_count(0), cstripe_count(0), compr_type(0), compr_lvl(0) {}
+	LustreLayoutComponent()
+	    : comp_index(0), comp_id(0), mirror_id(0), comp_flags(0), extent_start(0), extent_end(LUSTRE_EOF), pattern(0),
+	      stripe_size(0), stripe_count(0), stripe_offset(0xFFFF), dstripe_count(0), cstripe_count(0), compr_type(0),
+	      compr_lvl(0) {
+	}
 };
 
 //===----------------------------------------------------------------------===//
 // Lustre OST Object - per-stripe object placement information
 //===----------------------------------------------------------------------===//
 struct LustreOSTObject {
-	uint32_t comp_index;       // Component this object belongs to
-	uint32_t stripe_index;     // 0-based stripe index within the component
-	uint32_t ost_idx;          // OST index
-	uint64_t ost_oi_id;        // Object ID on the OST
-	uint64_t ost_oi_seq;       // Object sequence on the OST
+	uint32_t comp_index;   // Component this object belongs to
+	uint32_t stripe_index; // 0-based stripe index within the component
+	uint32_t ost_idx;      // OST index
+	uint64_t ost_oi_id;    // Object ID on the OST
+	uint64_t ost_oi_seq;   // Object sequence on the OST
 
-	LustreOSTObject() : comp_index(0), stripe_index(0), ost_idx(0), ost_oi_id(0), ost_oi_seq(0) {}
+	LustreOSTObject() : comp_index(0), stripe_index(0), ost_idx(0), ost_oi_id(0), ost_oi_seq(0) {
+	}
 };
 
 //===----------------------------------------------------------------------===//
@@ -388,44 +417,44 @@ struct LustreOSTObject {
 //===----------------------------------------------------------------------===//
 struct LustreInode {
 	// Basic inode fields
-	uint64_t ino;           // Inode number
-	uint16_t mode;          // File mode (type + permissions)
-	uint32_t nlink;         // Hard link count
-	uint32_t uid;           // User ID
-	uint32_t gid;           // Group ID
-	uint64_t size;          // File size in bytes
-	uint64_t blocks;        // Number of 512-byte blocks
+	uint64_t ino;    // Inode number
+	uint16_t mode;   // File mode (type + permissions)
+	uint32_t nlink;  // Hard link count
+	uint32_t uid;    // User ID
+	uint32_t gid;    // Group ID
+	uint64_t size;   // File size in bytes
+	uint64_t blocks; // Number of 512-byte blocks
 
 	// Timestamps (Unix epoch seconds)
-	int64_t atime;          // Last access time
-	int64_t mtime;          // Last modification time
-	int64_t ctime;          // Last status change time
+	int64_t atime; // Last access time
+	int64_t mtime; // Last modification time
+	int64_t ctime; // Last status change time
 
 	// Lustre-specific fields
-	LustreFID fid;          // Lustre FID
-	LustreFID parent_fid;   // Parent directory FID
+	LustreFID fid;        // Lustre FID
+	LustreFID parent_fid; // Parent directory FID
 
 	// Extended attributes
-	uint32_t projid;        // Project ID
-	uint32_t flags;         // Inode flags
+	uint32_t projid; // Project ID
+	uint32_t flags;  // Inode flags
 
 	// Derived fields
-	FileType type;          // File type
+	FileType type; // File type
 
-	LustreInode() : ino(0), mode(0), nlink(0), uid(0), gid(0), size(0), blocks(0),
-	                atime(0), mtime(0), ctime(0),
-	                projid(0), flags(0),
-	                type(FileType::UNKNOWN) {}
+	LustreInode()
+	    : ino(0), mode(0), nlink(0), uid(0), gid(0), size(0), blocks(0), atime(0), mtime(0), ctime(0), projid(0),
+	      flags(0), type(FileType::UNKNOWN) {
+	}
 };
 
 //===----------------------------------------------------------------------===//
 // Lustre Inode+Link Row - one joined row for internal fused scans
 //===----------------------------------------------------------------------===//
 struct LustreInodeLinkRow {
-	LustreInode inode;      // Full inode metadata
-	LustreFID link_fid;     // FID exposed by lustre_links
-	LustreFID parent_fid;   // Parent directory FID
-	std::string name;       // File name in parent directory
+	LustreInode inode;    // Full inode metadata
+	LustreFID link_fid;   // FID exposed by lustre_links
+	LustreFID parent_fid; // Parent directory FID
+	std::string name;     // File name in parent directory
 };
 
 //===----------------------------------------------------------------------===//
@@ -441,22 +470,22 @@ struct LustreInodeObjectRow {
 // Lustre Inode+Layout Row - one joined row for internal fused scans
 //===----------------------------------------------------------------------===//
 struct LustreInodeLayoutRow {
-	LustreInode inode;             // Full inode metadata
-	LustreFID layout_fid;          // FID exposed by lustre_layouts
-	LustreLayoutComponent layout;  // Layout component row
+	LustreInode inode;            // Full inode metadata
+	LustreFID layout_fid;         // FID exposed by lustre_layouts
+	LustreLayoutComponent layout; // Layout component row
 };
 
 //===----------------------------------------------------------------------===//
 // Extended Attribute names used by Lustre
 //===----------------------------------------------------------------------===//
 namespace xattr {
-	constexpr const char* LMA = "trusted.lma";      // Lustre Metadata Attributes
-	constexpr const char* LOV = "trusted.lov";      // LOV stripe info
-	constexpr const char* LMV = "trusted.lmv";      // LMV directory stripe
-	constexpr const char* LINK = "trusted.link";    // Hard link info
-	constexpr const char* FID = "trusted.fid";      // FID
-	constexpr const char* SOM = "trusted.som";      // Size on MDS
-}
+constexpr const char *LMA = "trusted.lma";   // Lustre Metadata Attributes
+constexpr const char *LOV = "trusted.lov";   // LOV stripe info
+constexpr const char *LMV = "trusted.lmv";   // LMV directory stripe
+constexpr const char *LINK = "trusted.link"; // Hard link info
+constexpr const char *FID = "trusted.fid";   // FID
+constexpr const char *SOM = "trusted.som";   // Size on MDS
+} // namespace xattr
 
 } // namespace lustre
 } // namespace duckdb

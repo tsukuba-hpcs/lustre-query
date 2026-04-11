@@ -25,12 +25,12 @@ static inline uint64_t ReadBE64(const uint8_t *p) {
 	return (static_cast<uint64_t>(p[0]) << 56) | (static_cast<uint64_t>(p[1]) << 48) |
 	       (static_cast<uint64_t>(p[2]) << 40) | (static_cast<uint64_t>(p[3]) << 32) |
 	       (static_cast<uint64_t>(p[4]) << 24) | (static_cast<uint64_t>(p[5]) << 16) |
-	       (static_cast<uint64_t>(p[6]) << 8)  | static_cast<uint64_t>(p[7]);
+	       (static_cast<uint64_t>(p[6]) << 8) | static_cast<uint64_t>(p[7]);
 }
 
 static inline uint32_t ReadBE32(const uint8_t *p) {
 	return (static_cast<uint32_t>(p[0]) << 24) | (static_cast<uint32_t>(p[1]) << 16) |
-	       (static_cast<uint32_t>(p[2]) << 8)  | static_cast<uint32_t>(p[3]);
+	       (static_cast<uint32_t>(p[2]) << 8) | static_cast<uint32_t>(p[3]);
 }
 
 static inline uint16_t ReadBE16(const uint8_t *p) {
@@ -38,15 +38,15 @@ static inline uint16_t ReadBE16(const uint8_t *p) {
 }
 
 static inline uint64_t ReadLE64(const uint8_t *p) {
-	return static_cast<uint64_t>(p[0]) | (static_cast<uint64_t>(p[1]) << 8) |
-	       (static_cast<uint64_t>(p[2]) << 16) | (static_cast<uint64_t>(p[3]) << 24) |
-	       (static_cast<uint64_t>(p[4]) << 32) | (static_cast<uint64_t>(p[5]) << 40) |
-	       (static_cast<uint64_t>(p[6]) << 48) | (static_cast<uint64_t>(p[7]) << 56);
+	return static_cast<uint64_t>(p[0]) | (static_cast<uint64_t>(p[1]) << 8) | (static_cast<uint64_t>(p[2]) << 16) |
+	       (static_cast<uint64_t>(p[3]) << 24) | (static_cast<uint64_t>(p[4]) << 32) |
+	       (static_cast<uint64_t>(p[5]) << 40) | (static_cast<uint64_t>(p[6]) << 48) |
+	       (static_cast<uint64_t>(p[7]) << 56);
 }
 
 static inline uint32_t ReadLE32(const uint8_t *p) {
-	return static_cast<uint32_t>(p[0]) | (static_cast<uint32_t>(p[1]) << 8) |
-	       (static_cast<uint32_t>(p[2]) << 16) | (static_cast<uint32_t>(p[3]) << 24);
+	return static_cast<uint32_t>(p[0]) | (static_cast<uint32_t>(p[1]) << 8) | (static_cast<uint32_t>(p[2]) << 16) |
+	       (static_cast<uint32_t>(p[3]) << 24);
 }
 
 static inline uint16_t ReadLE16(const uint8_t *p) {
@@ -98,16 +98,15 @@ struct XattrValueRef {
 	bool found = false;
 };
 
-static bool MatchXattrEntry(const struct ext2_ext_attr_entry *entry, uint8_t name_index,
-                            const char *short_name, size_t short_name_len) {
-	return entry->e_name_index == name_index &&
-	       entry->e_name_len == short_name_len &&
+static bool MatchXattrEntry(const struct ext2_ext_attr_entry *entry, uint8_t name_index, const char *short_name,
+                            size_t short_name_len) {
+	return entry->e_name_index == name_index && entry->e_name_len == short_name_len &&
 	       memcmp(EXT2_EXT_ATTR_NAME(entry), short_name, short_name_len) == 0;
 }
 
 static bool FindXattrEntryInRegion(uint8_t name_index, const char *short_name, size_t short_name_len,
-                                   struct ext2_ext_attr_entry *entries, unsigned int storage_size,
-                                   char *value_start, size_t values_size, XattrValueRef &result) {
+                                   struct ext2_ext_attr_entry *entries, unsigned int storage_size, char *value_start,
+                                   size_t values_size, XattrValueRef &result) {
 	auto *entry = entries;
 	unsigned int remain = storage_size;
 
@@ -174,8 +173,8 @@ static bool ReadIndexedFileBlock(ext2_file_t file, uint32_t block_size, blk64_t 
 	return err == 0 && got == block_size;
 }
 
-static const uint8_t *FindIAMIndexEntry(const uint8_t *entries, uint16_t count, uint16_t keysize,
-                                        uint16_t ptrsize, const uint8_t *target_key) {
+static const uint8_t *FindIAMIndexEntry(const uint8_t *entries, uint16_t count, uint16_t keysize, uint16_t ptrsize,
+                                        const uint8_t *target_key) {
 	const auto entry_size = static_cast<idx_t>(keysize + ptrsize);
 	if (count <= 1 || entry_size == 0) {
 		return nullptr;
@@ -313,8 +312,8 @@ static bool CollectFLDRangesFromBlock(ext2_file_t file, uint32_t block_size, uin
 		if (child == 0) {
 			continue;
 		}
-		if (!CollectFLDRangesFromBlock(file, block_size, keysize, recsize, ptrsize, remaining_levels - 1,
-		                               child, buffer, ranges_out)) {
+		if (!CollectFLDRangesFromBlock(file, block_size, keysize, recsize, ptrsize, remaining_levels - 1, child, buffer,
+		                               ranges_out)) {
 			return false;
 		}
 	}
@@ -402,8 +401,7 @@ void MDTScanner::CloseFLD() {
 //===----------------------------------------------------------------------===//
 
 MDTScanner::MDTScanner()
-    : fs_(nullptr), scan_(nullptr), oi_ctx_(nullptr), next_block_group_(0),
-      scanned_inodes_(0), valid_inodes_(0) {
+    : fs_(nullptr), scan_(nullptr), oi_ctx_(nullptr), next_block_group_(0), scanned_inodes_(0), valid_inodes_(0) {
 }
 
 MDTScanner::~MDTScanner() {
@@ -422,14 +420,11 @@ void MDTScanner::Open(const std::string &device_path) {
 	device_path_ = device_path;
 
 	// Open the filesystem in read-only mode
-	errcode_t err = ext2fs_open(
-	    device_path.c_str(),
-	    EXT2_FLAG_64BITS | EXT2_FLAG_SOFTSUPP_FEATURES,  // flags
-	    0,              // superblock (0 = default)
-	    0,              // block_size (0 = auto-detect)
-	    unix_io_manager,
-	    &fs_
-	);
+	errcode_t err = ext2fs_open(device_path.c_str(),
+	                            EXT2_FLAG_64BITS | EXT2_FLAG_SOFTSUPP_FEATURES, // flags
+	                            0,                                              // superblock (0 = default)
+	                            0,                                              // block_size (0 = auto-detect)
+	                            unix_io_manager, &fs_);
 
 	if (err) {
 		throw IOException("Failed to open filesystem '%s': %s", device_path, error_message(err));
@@ -496,7 +491,8 @@ uint64_t MDTScanner::GetTotalInodes() const {
 }
 
 uint64_t MDTScanner::GetUsedInodes() const {
-	if (!fs_ || !fs_->super) return 0;
+	if (!fs_ || !fs_->super)
+		return 0;
 	return fs_->super->s_inodes_count - fs_->super->s_free_inodes_count;
 }
 
@@ -572,8 +568,7 @@ void MDTScanner::GotoBlockGroup(int group) {
 	skip_current_group_ = false;
 	errcode_t err = ext2fs_inode_scan_goto_blockgroup(scan_, group);
 	if (err) {
-		throw IOException("Failed to goto block group %d for '%s': %s",
-		                  group, device_path_, error_message(err));
+		throw IOException("Failed to goto block group %d for '%s': %s", group, device_path_, error_message(err));
 	}
 }
 
@@ -581,7 +576,7 @@ int MDTScanner::GetNextBlockGroup() {
 	while (true) {
 		int group = next_block_group_.fetch_add(1);
 		if (group >= (int)GetBlockGroupCount()) {
-			return -1;  // No more block groups
+			return -1; // No more block groups
 		}
 		if (BlockGroupHasAllocatedInodes(group)) {
 			return group;
@@ -663,8 +658,8 @@ bool MDTScanner::GetNextRawInode(ext2_ino_t &ino) {
 	auto inode_size = static_cast<int>(inode_size_);
 
 	while (true) {
-		errcode_t err = ext2fs_get_next_inode_full(scan_, &ino,
-			reinterpret_cast<struct ext2_inode *>(inode_buffer_.data()), inode_size);
+		errcode_t err = ext2fs_get_next_inode_full(
+		    scan_, &ino, reinterpret_cast<struct ext2_inode *>(inode_buffer_.data()), inode_size);
 		if (err) {
 			throw IOException("Failed to get next inode for '%s': %s", device_path_, error_message(err));
 		}
@@ -707,8 +702,8 @@ bool MDTScanner::GetNextRawInode(ext2_ino_t &ino, ext2_ino_t max_ino) {
 	auto inode_size = static_cast<int>(inode_size_);
 
 	while (true) {
-		errcode_t err = ext2fs_get_next_inode_full(scan_, &ino,
-			reinterpret_cast<struct ext2_inode *>(inode_buffer_.data()), inode_size);
+		errcode_t err = ext2fs_get_next_inode_full(
+		    scan_, &ino, reinterpret_cast<struct ext2_inode *>(inode_buffer_.data()), inode_size);
 		if (err) {
 			throw IOException("Failed to get next inode for '%s': %s", device_path_, error_message(err));
 		}
@@ -748,8 +743,8 @@ bool MDTScanner::ReadRawInode(ext2_ino_t ino) {
 	}
 
 	EnsureInodeBuffer();
-	errcode_t err = ext2fs_read_inode_full(fs_, ino,
-		reinterpret_cast<struct ext2_inode *>(inode_buffer_.data()), static_cast<int>(inode_size_));
+	errcode_t err = ext2fs_read_inode_full(fs_, ino, reinterpret_cast<struct ext2_inode *>(inode_buffer_.data()),
+	                                       static_cast<int>(inode_size_));
 	if (err) {
 		return false;
 	}
@@ -808,11 +803,10 @@ bool MDTScanner::FindBufferedXattrValue(uint8_t name_index, const char *short_na
 		memcpy(&magic, ibody_start, sizeof(magic));
 		if (magic == EXT2_EXT_ATTR_MAGIC) {
 			auto storage_size = static_cast<unsigned int>(inode_size_ - EXT2_GOOD_OLD_INODE_SIZE -
-			                                             inode->i_extra_isize - sizeof(__u32));
+			                                              inode->i_extra_isize - sizeof(__u32));
 			auto *entries = reinterpret_cast<struct ext2_ext_attr_entry *>(ibody_start + sizeof(__u32));
-			if (FindXattrEntryInRegion(name_index, short_name, short_name_len,
-			                           entries, storage_size, reinterpret_cast<char *>(entries),
-			                           storage_size, result)) {
+			if (FindXattrEntryInRegion(name_index, short_name, short_name_len, entries, storage_size,
+			                           reinterpret_cast<char *>(entries), storage_size, result)) {
 				value_ptr = result.value_ptr;
 				value_len = result.value_len;
 				value_inum = result.value_inum;
@@ -831,9 +825,8 @@ bool MDTScanner::FindBufferedXattrValue(uint8_t name_index, const char *short_na
 	auto *entries = reinterpret_cast<struct ext2_ext_attr_entry *>(xattr_block_buffer_.data() +
 	                                                               sizeof(struct ext2_ext_attr_header));
 	auto storage_size = static_cast<unsigned int>(block_size_ - sizeof(struct ext2_ext_attr_header));
-	if (FindXattrEntryInRegion(name_index, short_name, short_name_len,
-	                           entries, storage_size, xattr_block_buffer_.data(),
-	                           xattr_block_buffer_.size(), result)) {
+	if (FindXattrEntryInRegion(name_index, short_name, short_name_len, entries, storage_size,
+	                           xattr_block_buffer_.data(), xattr_block_buffer_.size(), result)) {
 		value_ptr = result.value_ptr;
 		value_len = result.value_len;
 		value_inum = result.value_inum;
@@ -857,12 +850,9 @@ bool MDTScanner::ReadExternalXattrPrefix(ext2_ino_t value_ino, void *buf, unsign
 
 	auto *ea_inode = ext2fs_file_get_inode(ea_file);
 	bool ok = false;
-	if (!(ea_inode->i_flags & EXT4_INLINE_DATA_FL) &&
-	    (ea_inode->i_flags & EXT4_EA_INODE_FL) &&
-	    ea_inode->i_links_count != 0 &&
-	    static_cast<__u64>(ext2fs_file_get_size(ea_file)) >= wanted &&
-	    ext2fs_file_read(ea_file, buf, wanted, &got) == 0 &&
-	    got == wanted) {
+	if (!(ea_inode->i_flags & EXT4_INLINE_DATA_FL) && (ea_inode->i_flags & EXT4_EA_INODE_FL) &&
+	    ea_inode->i_links_count != 0 && static_cast<__u64>(ext2fs_file_get_size(ea_file)) >= wanted &&
+	    ext2fs_file_read(ea_file, buf, wanted, &got) == 0 && got == wanted) {
 		ok = true;
 	}
 
@@ -886,11 +876,8 @@ bool MDTScanner::ReadExternalXattrValue(ext2_ino_t value_ino, const uint8_t *&va
 	auto *ea_inode = ext2fs_file_get_inode(ea_file);
 	auto file_size = static_cast<size_t>(ext2fs_file_get_size(ea_file));
 	bool ok = false;
-	if (!(ea_inode->i_flags & EXT4_INLINE_DATA_FL) &&
-	    (ea_inode->i_flags & EXT4_EA_INODE_FL) &&
-	    ea_inode->i_links_count != 0 &&
-	    file_size != 0 &&
-	    file_size <= std::numeric_limits<unsigned int>::max()) {
+	if (!(ea_inode->i_flags & EXT4_INLINE_DATA_FL) && (ea_inode->i_flags & EXT4_EA_INODE_FL) &&
+	    ea_inode->i_links_count != 0 && file_size != 0 && file_size <= std::numeric_limits<unsigned int>::max()) {
 		xattr_value_buffer_.resize(file_size);
 		unsigned int got = 0;
 		if (ext2fs_file_read(ea_file, xattr_value_buffer_.data(), static_cast<unsigned int>(file_size), &got) == 0 &&
@@ -1256,7 +1243,7 @@ bool MDTScanner::GetNextLink(LustreLink &link, const MDTScanConfig &config, ext2
 
 void MDTScanner::InitOI() {
 	if (oi_ctx_) {
-		return;  // Already initialized
+		return; // Already initialized
 	}
 	oi_ctx_ = oi_open(device_path_.c_str());
 	if (!oi_ctx_) {
@@ -1494,8 +1481,7 @@ bool MDTScanner::ReadInodeLinks(ext2_ino_t ino, LustreInode &inode_out, std::vec
 }
 
 bool MDTScanner::ReadInodeLinkLayouts(ext2_ino_t ino, LustreFID &fid_out, std::vector<LinkEntry> &links_out,
-                                      std::vector<LustreLayoutComponent> &components_out,
-                                      const MDTScanConfig &config) {
+                                      std::vector<LustreLayoutComponent> &components_out, const MDTScanConfig &config) {
 	links_out.clear();
 	components_out.clear();
 
@@ -1693,8 +1679,7 @@ bool MDTScanner::ReadInodeLinkEA(ext2_ino_t ino, LustreFID &fid_out, std::vector
 	return ParseBufferedFID(fid_out) && ParseBufferedLinkEA(links_out, read_names);
 }
 
-bool MDTScanner::ReadInodeLayouts(ext2_ino_t ino, LustreFID &fid_out,
-                                  std::vector<LustreLayoutComponent> &components) {
+bool MDTScanner::ReadInodeLayouts(ext2_ino_t ino, LustreFID &fid_out, std::vector<LustreLayoutComponent> &components) {
 	components.clear();
 
 	if (!ReadRawInode(ino)) {
@@ -2030,8 +2015,7 @@ bool MDTScanner::GetNextInodeLayoutObjects(LustreFID &fid_out, std::vector<Lustr
 	}
 }
 
-bool MDTScanner::ReadInodeObjects(ext2_ino_t ino, LustreFID &fid_out,
-                                  std::vector<LustreOSTObject> &objects) {
+bool MDTScanner::ReadInodeObjects(ext2_ino_t ino, LustreFID &fid_out, std::vector<LustreOSTObject> &objects) {
 	objects.clear();
 
 	if (!ReadRawInode(ino)) {
@@ -2043,8 +2027,8 @@ bool MDTScanner::ReadInodeObjects(ext2_ino_t ino, LustreFID &fid_out,
 	return has_fid;
 }
 
-bool MDTScanner::ReadInodeObjects(ext2_ino_t ino, LustreInode &inode_out,
-                                  std::vector<LustreOSTObject> &objects, const MDTScanConfig &config) {
+bool MDTScanner::ReadInodeObjects(ext2_ino_t ino, LustreInode &inode_out, std::vector<LustreOSTObject> &objects,
+                                  const MDTScanConfig &config) {
 	if (!fs_) {
 		throw IOException("Filesystem not open for '%s'", device_path_);
 	}
@@ -2309,9 +2293,7 @@ static bool ShouldSkipDirEntry(const struct ext2_dir_entry *dirent) {
 	return false;
 }
 
-static int dir_iterate_callback(struct ext2_dir_entry *dirent,
-                                int offset, int blocksize,
-                                char *buf, void *priv_data) {
+static int dir_iterate_callback(struct ext2_dir_entry *dirent, int offset, int blocksize, char *buf, void *priv_data) {
 	auto *cb_data = static_cast<DirIterateCallbackData *>(priv_data);
 	if (ShouldSkipDirEntry(dirent)) {
 		return 0;
@@ -2327,9 +2309,7 @@ static int dir_iterate_callback(struct ext2_dir_entry *dirent,
 	return 0;
 }
 
-static int dir_count_callback(struct ext2_dir_entry *dirent,
-                              int offset, int blocksize,
-                              char *buf, void *priv_data) {
+static int dir_count_callback(struct ext2_dir_entry *dirent, int offset, int blocksize, char *buf, void *priv_data) {
 	auto *cb_data = static_cast<DirCountCallbackData *>(priv_data);
 	if (!ShouldSkipDirEntry(dirent)) {
 		cb_data->count++;
@@ -2347,8 +2327,7 @@ bool MDTScanner::ReadDirectoryEntries(ext2_ino_t dir_ino, std::vector<DirEntry> 
 	DirIterateCallbackData cb_data;
 	cb_data.entries = &entries_out;
 
-	errcode_t err = ext2fs_dir_iterate(fs_, dir_ino, 0, nullptr,
-	                                   dir_iterate_callback, &cb_data);
+	errcode_t err = ext2fs_dir_iterate(fs_, dir_ino, 0, nullptr, dir_iterate_callback, &cb_data);
 	if (err) {
 		return false;
 	}
@@ -2387,10 +2366,8 @@ bool MDTScanner::LookupName(ext2_ino_t dir_ino, const std::string &name, ext2_in
 //===----------------------------------------------------------------------===//
 
 bool MDTScanner::GetNextDirMapEntries(ext2_ino_t &ino_out, LustreFID &fid_out, LustreLMV &lmv_out,
-                                      std::vector<LinkEntry> &links_out,
-                                      std::vector<DirEntry> &dir_entries_out,
-                                      uint32_t &lma_incompat_out,
-                                      const MDTScanConfig &config) {
+                                      std::vector<LinkEntry> &links_out, std::vector<DirEntry> &dir_entries_out,
+                                      uint32_t &lma_incompat_out, const MDTScanConfig &config) {
 	ext2_ino_t ino;
 
 	while (true) {
@@ -2438,10 +2415,8 @@ bool MDTScanner::GetNextDirMapEntries(ext2_ino_t &ino_out, LustreFID &fid_out, L
 }
 
 bool MDTScanner::GetNextDirMapEntries(ext2_ino_t &ino_out, LustreFID &fid_out, LustreLMV &lmv_out,
-                                      std::vector<LinkEntry> &links_out,
-                                      std::vector<DirEntry> &dir_entries_out,
-                                      uint32_t &lma_incompat_out,
-                                      const MDTScanConfig &config, ext2_ino_t max_ino) {
+                                      std::vector<LinkEntry> &links_out, std::vector<DirEntry> &dir_entries_out,
+                                      uint32_t &lma_incompat_out, const MDTScanConfig &config, ext2_ino_t max_ino) {
 	ext2_ino_t ino;
 
 	while (true) {
@@ -2592,13 +2567,13 @@ bool MDTScanner::ParseBufferedLMV(LustreLMV &lmv) {
 	// Offset 28: lmv_padding2 (u32)
 	// Offset 32: lmv_padding3 (u64)
 	// Offset 40: lmv_pool_name[16]
-	memcpy(&lmv.lmv_magic,            value_ptr + 0,  sizeof(uint32_t));
-	memcpy(&lmv.lmv_stripe_count,     value_ptr + 4,  sizeof(uint32_t));
-	memcpy(&lmv.lmv_master_mdt_index, value_ptr + 8,  sizeof(uint32_t));
-	memcpy(&lmv.lmv_hash_type,        value_ptr + 12, sizeof(uint32_t));
-	memcpy(&lmv.lmv_layout_version,   value_ptr + 16, sizeof(uint32_t));
-	memcpy(&lmv.lmv_migrate_offset,   value_ptr + 20, sizeof(uint32_t));
-	memcpy(&lmv.lmv_migrate_hash,     value_ptr + 24, sizeof(uint32_t));
+	memcpy(&lmv.lmv_magic, value_ptr + 0, sizeof(uint32_t));
+	memcpy(&lmv.lmv_stripe_count, value_ptr + 4, sizeof(uint32_t));
+	memcpy(&lmv.lmv_master_mdt_index, value_ptr + 8, sizeof(uint32_t));
+	memcpy(&lmv.lmv_hash_type, value_ptr + 12, sizeof(uint32_t));
+	memcpy(&lmv.lmv_layout_version, value_ptr + 16, sizeof(uint32_t));
+	memcpy(&lmv.lmv_migrate_offset, value_ptr + 20, sizeof(uint32_t));
+	memcpy(&lmv.lmv_migrate_hash, value_ptr + 24, sizeof(uint32_t));
 
 	const char *pool_ptr = reinterpret_cast<const char *>(value_ptr + 40);
 	size_t pool_len = strnlen(pool_ptr, LMV_POOL_NAME_SIZE);
@@ -2649,14 +2624,10 @@ bool MDTScanner::ReadInodeLMV(ext2_ino_t ino, LustreLMV &lmv_out) {
 //   Offset 16: u32 l_ost_gen
 //   Offset 20: u32 l_ost_idx
 
-static bool ParseV1V3Blob(const uint8_t *data, size_t data_len,
-                           uint32_t comp_index, uint32_t comp_id,
-                           uint16_t mirror_id, uint32_t comp_flags,
-                           uint64_t extent_start, uint64_t extent_end,
-                           uint8_t dstripe_count, uint8_t cstripe_count,
-                           uint8_t compr_type, uint8_t compr_lvl,
-                           LustreLayoutComponent *out_component,
-                           std::vector<LustreOSTObject> *out_objects) {
+static bool ParseV1V3Blob(const uint8_t *data, size_t data_len, uint32_t comp_index, uint32_t comp_id,
+                          uint16_t mirror_id, uint32_t comp_flags, uint64_t extent_start, uint64_t extent_end,
+                          uint8_t dstripe_count, uint8_t cstripe_count, uint8_t compr_type, uint8_t compr_lvl,
+                          LustreLayoutComponent *out_component, std::vector<LustreOSTObject> *out_objects) {
 	if (data_len < 32) {
 		return false;
 	}
@@ -2771,9 +2742,8 @@ static bool ParseV1V3Blob(const uint8_t *data, size_t data_len,
 static constexpr size_t COMP_V1_HEADER_SIZE = 32;
 static constexpr size_t COMP_ENTRY_SIZE = 48;
 
-static bool ParseLOVValue(const uint8_t *data, size_t value_len,
-                         std::vector<LustreLayoutComponent> *components,
-                         std::vector<LustreOSTObject> *objects) {
+static bool ParseLOVValue(const uint8_t *data, size_t value_len, std::vector<LustreLayoutComponent> *components,
+                          std::vector<LustreOSTObject> *objects) {
 	if (!data) {
 		return false;
 	}
@@ -2790,9 +2760,8 @@ static bool ParseLOVValue(const uint8_t *data, size_t value_len,
 	if (magic == LOV_MAGIC_V1 || magic == LOV_MAGIC_V3) {
 		// Simple (non-composite) layout — emit as a single component
 		LustreLayoutComponent comp;
-		result = ParseV1V3Blob(data, value_len, 0, 0, 0, 0, 0, LUSTRE_EOF,
-		                       0, 0, 0, 0,
-		                       components ? &comp : nullptr, objects);
+		result = ParseV1V3Blob(data, value_len, 0, 0, 0, 0, 0, LUSTRE_EOF, 0, 0, 0, 0, components ? &comp : nullptr,
+		                       objects);
 		if (result && components) {
 			components->push_back(std::move(comp));
 		}
@@ -2842,10 +2811,8 @@ static bool ParseLOVValue(const uint8_t *data, size_t value_len,
 			}
 
 			LustreLayoutComponent comp;
-			ParseV1V3Blob(data + lcme_offset, lcme_size, i, lcme_id, mirror_id,
-			              lcme_flags, extent_start, extent_end,
-			              dstripe_count, cstripe_count, compr_type, compr_lvl,
-			              components ? &comp : nullptr, objects);
+			ParseV1V3Blob(data + lcme_offset, lcme_size, i, lcme_id, mirror_id, lcme_flags, extent_start, extent_end,
+			              dstripe_count, cstripe_count, compr_type, compr_lvl, components ? &comp : nullptr, objects);
 
 			if (components) {
 				components->push_back(std::move(comp));

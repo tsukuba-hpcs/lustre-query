@@ -32,17 +32,17 @@ static constexpr idx_t INODE_OBJECT_EXACT_LOOKUP_BATCH_SIZE = 512;
 static constexpr idx_t INODE_OBJECT_SEQ_SCAN_THRESHOLD = 8192;
 
 static const vector<string> INODE_OBJECT_COLUMN_NAMES = {
-    "inode_fid", "ino", "type", "mode", "nlink", "uid", "gid", "size", "blocks",    "atime",       "mtime",
-    "ctime",     "projid", "flags", "device", "object_fid", "comp_index", "stripe_index", "ost_idx",
-    "ost_oi_id", "ost_oi_seq", "object_device"};
+    "inode_fid",  "ino",          "type",    "mode",      "nlink",      "uid",          "gid",    "size",
+    "blocks",     "atime",        "mtime",   "ctime",     "projid",     "flags",        "device", "object_fid",
+    "comp_index", "stripe_index", "ost_idx", "ost_oi_id", "ost_oi_seq", "object_device"};
 
 static const vector<LogicalType> INODE_OBJECT_COLUMN_TYPES = {
-    LogicalType::VARCHAR,   LogicalType::UBIGINT,  LogicalType::VARCHAR,  LogicalType::UINTEGER,
-    LogicalType::UINTEGER,  LogicalType::UINTEGER, LogicalType::UINTEGER, LogicalType::UBIGINT,
-    LogicalType::UBIGINT,   LogicalType::TIMESTAMP, LogicalType::TIMESTAMP, LogicalType::TIMESTAMP,
-    LogicalType::UINTEGER,  LogicalType::UINTEGER, LogicalType::VARCHAR,  LogicalType::VARCHAR,
-    LogicalType::UINTEGER,  LogicalType::UINTEGER, LogicalType::UINTEGER, LogicalType::UBIGINT,
-    LogicalType::UBIGINT,   LogicalType::VARCHAR};
+    LogicalType::VARCHAR,  LogicalType::UBIGINT,   LogicalType::VARCHAR,   LogicalType::UINTEGER,
+    LogicalType::UINTEGER, LogicalType::UINTEGER,  LogicalType::UINTEGER,  LogicalType::UBIGINT,
+    LogicalType::UBIGINT,  LogicalType::TIMESTAMP, LogicalType::TIMESTAMP, LogicalType::TIMESTAMP,
+    LogicalType::UINTEGER, LogicalType::UINTEGER,  LogicalType::VARCHAR,   LogicalType::VARCHAR,
+    LogicalType::UINTEGER, LogicalType::UINTEGER,  LogicalType::UINTEGER,  LogicalType::UBIGINT,
+    LogicalType::UBIGINT,  LogicalType::VARCHAR};
 
 struct LustreInodeObjectsFilter {
 	unique_ptr<LustreFilterSet> inode_filters;
@@ -101,9 +101,11 @@ struct LustreInodeObjectsFilter {
 			                      object_fid_filter->fid_values.begin(), object_fid_filter->fid_values.end(),
 			                      std::back_inserter(lookup_fids));
 		} else if (has_inode_fids) {
-			lookup_fids.insert(lookup_fids.end(), inode_fid_filter->fid_values.begin(), inode_fid_filter->fid_values.end());
+			lookup_fids.insert(lookup_fids.end(), inode_fid_filter->fid_values.begin(),
+			                   inode_fid_filter->fid_values.end());
 		} else if (has_object_fids) {
-			lookup_fids.insert(lookup_fids.end(), object_fid_filter->fid_values.begin(), object_fid_filter->fid_values.end());
+			lookup_fids.insert(lookup_fids.end(), object_fid_filter->fid_values.begin(),
+			                   object_fid_filter->fid_values.end());
 		}
 		std::sort(lookup_fids.begin(), lookup_fids.end());
 		lookup_fids.erase(std::unique(lookup_fids.begin(), lookup_fids.end()), lookup_fids.end());
@@ -209,8 +211,9 @@ struct LustreInodeObjectsGlobalState : public GlobalTableFunctionState {
 	bool use_sequential_scan = true;
 	idx_t thread_count = 1;
 
-	LustreInodeObjectsGlobalState() : current_device_idx(0), finished(false), device_initialized(false), next_fid_idx(0),
-	                                  next_block_group(0), active_block_groups(0) {
+	LustreInodeObjectsGlobalState()
+	    : current_device_idx(0), finished(false), device_initialized(false), next_fid_idx(0), next_block_group(0),
+	      active_block_groups(0) {
 	}
 
 	idx_t MaxThreads() const override {
@@ -648,9 +651,8 @@ static void LustreInodeObjectsExecute(ClientContext &context, TableFunctionInput
 			lock_guard<mutex> lock(gstate.device_transition_lock);
 			idx_t current_dev = gstate.current_device_idx.load();
 			if (lstate.initialized_device_idx == current_dev &&
-			    (!gstate.use_sequential_scan ||
-			     (gstate.next_block_group.load() >= gstate.total_block_groups &&
-			      gstate.active_block_groups.load() == 0))) {
+			    (!gstate.use_sequential_scan || (gstate.next_block_group.load() >= gstate.total_block_groups &&
+			                                     gstate.active_block_groups.load() == 0))) {
 				gstate.device_initialized.store(false);
 				gstate.current_device_idx++;
 				gstate.next_fid_idx.store(0);

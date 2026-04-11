@@ -56,25 +56,25 @@ static bool ShouldUseSequentialScan(const LinkFilter &filter) {
 //===----------------------------------------------------------------------===//
 
 static const vector<string> LINK_COLUMN_NAMES = {
-    "fid",         // Lustre FID of the inode
-    "parent_fid",  // Parent directory FID
-    "name",        // File name in parent directory
-    "device"       // Source device path
+    "fid",        // Lustre FID of the inode
+    "parent_fid", // Parent directory FID
+    "name",       // File name in parent directory
+    "device"      // Source device path
 };
 
 static const vector<LogicalType> LINK_COLUMN_TYPES = {
-    LogicalType::VARCHAR,  // fid
-    LogicalType::VARCHAR,  // parent_fid
-    LogicalType::VARCHAR,  // name
-    LogicalType::VARCHAR   // device
+    LogicalType::VARCHAR, // fid
+    LogicalType::VARCHAR, // parent_fid
+    LogicalType::VARCHAR, // name
+    LogicalType::VARCHAR  // device
 };
 
 //===----------------------------------------------------------------------===//
 // LinkFilter Implementation
 //===----------------------------------------------------------------------===//
 
-static void ParseLinkFilterColumn(idx_t actual_col, const TableFilter &filter,
-                                  vector<LustreFID> &fid_values, vector<LustreFID> &parent_fid_values,
+static void ParseLinkFilterColumn(idx_t actual_col, const TableFilter &filter, vector<LustreFID> &fid_values,
+                                  vector<LustreFID> &parent_fid_values,
                                   vector<shared_ptr<DynamicFilterData>> *dynamic_fid_filters = nullptr,
                                   vector<shared_ptr<DynamicFilterData>> *dynamic_parent_fid_filters = nullptr) {
 	// Only process fid (col 0) and parent_fid (col 1)
@@ -83,9 +83,7 @@ static void ParseLinkFilterColumn(idx_t actual_col, const TableFilter &filter,
 		return;
 	}
 
-	auto &target = (actual_col == static_cast<idx_t>(LinkColumnIdx::FID))
-	                   ? fid_values
-	                   : parent_fid_values;
+	auto &target = (actual_col == static_cast<idx_t>(LinkColumnIdx::FID)) ? fid_values : parent_fid_values;
 
 	switch (filter.filter_type) {
 	case TableFilterType::CONSTANT_COMPARISON: {
@@ -117,8 +115,8 @@ static void ParseLinkFilterColumn(idx_t actual_col, const TableFilter &filter,
 	case TableFilterType::CONJUNCTION_AND: {
 		auto &and_filter = filter.Cast<ConjunctionAndFilter>();
 		for (const auto &child : and_filter.child_filters) {
-			ParseLinkFilterColumn(actual_col, *child, fid_values, parent_fid_values,
-			                      dynamic_fid_filters, dynamic_parent_fid_filters);
+			ParseLinkFilterColumn(actual_col, *child, fid_values, parent_fid_values, dynamic_fid_filters,
+			                      dynamic_parent_fid_filters);
 		}
 		break;
 	}
@@ -137,8 +135,7 @@ static void ParseLinkFilterColumn(idx_t actual_col, const TableFilter &filter,
 		if (dynamic_filter.filter_data) {
 			lock_guard<mutex> lock(dynamic_filter.filter_data->lock);
 			if (dynamic_filter.filter_data->initialized && dynamic_filter.filter_data->filter) {
-				ParseLinkFilterColumn(actual_col, *dynamic_filter.filter_data->filter,
-				                      fid_values, parent_fid_values,
+				ParseLinkFilterColumn(actual_col, *dynamic_filter.filter_data->filter, fid_values, parent_fid_values,
 				                      dynamic_fid_filters, dynamic_parent_fid_filters);
 			} else {
 				// Not yet initialized — store for deferred resolution
@@ -178,8 +175,7 @@ unique_ptr<LinkFilter> LinkFilter::Create(const TableFilterSet *filters, const v
 		if (actual_column_idx == static_cast<idx_t>(LinkColumnIdx::PARENT_FID) && !result->parent_fid_predicate) {
 			result->parent_fid_predicate = LustreStringFilter::Create(*entry.second);
 		}
-		ParseLinkFilterColumn(actual_column_idx, *entry.second,
-		                      result->fid_values, result->parent_fid_values,
+		ParseLinkFilterColumn(actual_column_idx, *entry.second, result->fid_values, result->parent_fid_values,
 		                      &result->dynamic_fid_filters, &result->dynamic_parent_fid_filters);
 	}
 
@@ -207,8 +203,7 @@ bool LinkFilter::ResolveDynamicFilters() {
 		}
 		lock_guard<mutex> lock(fd->lock);
 		if (fd->initialized && fd->filter) {
-			ParseLinkFilterColumn(static_cast<idx_t>(LinkColumnIdx::FID),
-			                      *fd->filter, fid_values, parent_fid_values);
+			ParseLinkFilterColumn(static_cast<idx_t>(LinkColumnIdx::FID), *fd->filter, fid_values, parent_fid_values);
 		}
 	}
 	for (auto &fd : dynamic_parent_fid_filters) {
@@ -217,8 +212,8 @@ bool LinkFilter::ResolveDynamicFilters() {
 		}
 		lock_guard<mutex> lock(fd->lock);
 		if (fd->initialized && fd->filter) {
-			ParseLinkFilterColumn(static_cast<idx_t>(LinkColumnIdx::PARENT_FID),
-			                      *fd->filter, fid_values, parent_fid_values);
+			ParseLinkFilterColumn(static_cast<idx_t>(LinkColumnIdx::PARENT_FID), *fd->filter, fid_values,
+			                      parent_fid_values);
 		}
 	}
 
@@ -234,10 +229,8 @@ bool LinkFilter::ResolveDynamicFilters() {
 // Bind Functions
 //===----------------------------------------------------------------------===//
 
-static unique_ptr<FunctionData> LustreLinksBindSingle(ClientContext &context,
-                                                      TableFunctionBindInput &input,
-                                                      vector<LogicalType> &return_types,
-                                                      vector<string> &names) {
+static unique_ptr<FunctionData> LustreLinksBindSingle(ClientContext &context, TableFunctionBindInput &input,
+                                                      vector<LogicalType> &return_types, vector<string> &names) {
 	auto result = make_uniq<LustreQueryBindData>();
 	result->device_paths.push_back(StringValue::Get(input.inputs[0]));
 	ParseNamedParameters(input.named_parameters, result->scan_config);
@@ -246,10 +239,8 @@ static unique_ptr<FunctionData> LustreLinksBindSingle(ClientContext &context,
 	return std::move(result);
 }
 
-static unique_ptr<FunctionData> LustreLinksBindMulti(ClientContext &context,
-                                                     TableFunctionBindInput &input,
-                                                     vector<LogicalType> &return_types,
-                                                     vector<string> &names) {
+static unique_ptr<FunctionData> LustreLinksBindMulti(ClientContext &context, TableFunctionBindInput &input,
+                                                     vector<LogicalType> &return_types, vector<string> &names) {
 	auto result = make_uniq<LustreQueryBindData>();
 	auto &list_values = ListValue::GetChildren(input.inputs[0]);
 	for (auto &val : list_values) {
@@ -269,7 +260,7 @@ static unique_ptr<FunctionData> LustreLinksBindMulti(ClientContext &context,
 //===----------------------------------------------------------------------===//
 
 static unique_ptr<GlobalTableFunctionState> LustreLinksInitGlobal(ClientContext &context,
-                                                                   TableFunctionInitInput &input) {
+                                                                  TableFunctionInitInput &input) {
 	auto &bind_data = input.bind_data->Cast<LustreQueryBindData>();
 
 	auto gstate = make_uniq<LustreLinksGlobalState>();
@@ -303,9 +294,8 @@ static unique_ptr<GlobalTableFunctionState> LustreLinksInitGlobal(ClientContext 
 	return std::move(gstate);
 }
 
-static unique_ptr<LocalTableFunctionState> LustreLinksInitLocal(ExecutionContext &context,
-                                                                 TableFunctionInitInput &input,
-                                                                 GlobalTableFunctionState *global_state) {
+static unique_ptr<LocalTableFunctionState>
+LustreLinksInitLocal(ExecutionContext &context, TableFunctionInitInput &input, GlobalTableFunctionState *global_state) {
 	return make_uniq<LustreLinksLocalState>();
 }
 
@@ -313,8 +303,8 @@ static unique_ptr<LocalTableFunctionState> LustreLinksInitLocal(ExecutionContext
 // Helper: Write a link output row
 //===----------------------------------------------------------------------===//
 
-static void WriteLinkRow(DataChunk &output, idx_t row_idx, const vector<idx_t> &column_ids,
-                         const LustreLink &link, const string &device_path) {
+static void WriteLinkRow(DataChunk &output, idx_t row_idx, const vector<idx_t> &column_ids, const LustreLink &link,
+                         const string &device_path) {
 	for (idx_t i = 0; i < column_ids.size(); i++) {
 		auto &vec = output.data[i];
 		switch (column_ids[i]) {
@@ -476,8 +466,8 @@ static bool MatchesLinkPredicate(const LinkFilter &filter, const LustreLink &lin
 // FID Path: batched lookup by fid → OI → inode → LinkEA → rows
 //===----------------------------------------------------------------------===//
 
-static bool ExecuteExactFIDPath(LustreLinksGlobalState &gstate, LustreLinksLocalState &lstate,
-                                DataChunk &output, idx_t &output_count) {
+static bool ExecuteExactFIDPath(LustreLinksGlobalState &gstate, LustreLinksLocalState &lstate, DataChunk &output,
+                                idx_t &output_count) {
 	auto &filter = *gstate.link_filter;
 	const auto &current_device = gstate.device_paths[lstate.initialized_device_idx];
 	struct LookupEntry {
@@ -487,10 +477,9 @@ static bool ExecuteExactFIDPath(LustreLinksGlobalState &gstate, LustreLinksLocal
 
 	while (output_count < STANDARD_VECTOR_SIZE) {
 		// Drain pending results first
-		while (lstate.pending_results_idx < lstate.pending_results.size() &&
-		       output_count < STANDARD_VECTOR_SIZE) {
-			WriteLinkRow(output, output_count, gstate.column_ids,
-			             lstate.pending_results[lstate.pending_results_idx], current_device);
+		while (lstate.pending_results_idx < lstate.pending_results.size() && output_count < STANDARD_VECTOR_SIZE) {
+			WriteLinkRow(output, output_count, gstate.column_ids, lstate.pending_results[lstate.pending_results_idx],
+			             current_device);
 			lstate.pending_results_idx++;
 			output_count++;
 		}
@@ -562,8 +551,8 @@ static bool ExecuteExactFIDPath(LustreLinksGlobalState &gstate, LustreLinksLocal
 // Parent FID Path: parent_fid → OI → dir inode → dir entries → child FIDs
 //===----------------------------------------------------------------------===//
 
-static bool ExecuteExactParentFIDPath(LustreLinksGlobalState &gstate, LustreLinksLocalState &lstate,
-                                      DataChunk &output, idx_t &output_count) {
+static bool ExecuteExactParentFIDPath(LustreLinksGlobalState &gstate, LustreLinksLocalState &lstate, DataChunk &output,
+                                      idx_t &output_count) {
 	auto &filter = *gstate.link_filter;
 	const auto &current_device = gstate.device_paths[lstate.initialized_device_idx];
 	struct LookupEntry {
@@ -573,10 +562,9 @@ static bool ExecuteExactParentFIDPath(LustreLinksGlobalState &gstate, LustreLink
 
 	while (output_count < STANDARD_VECTOR_SIZE) {
 		// Drain pending results first
-		while (lstate.pending_results_idx < lstate.pending_results.size() &&
-		       output_count < STANDARD_VECTOR_SIZE) {
-			WriteLinkRow(output, output_count, gstate.column_ids,
-			             lstate.pending_results[lstate.pending_results_idx], current_device);
+		while (lstate.pending_results_idx < lstate.pending_results.size() && output_count < STANDARD_VECTOR_SIZE) {
+			WriteLinkRow(output, output_count, gstate.column_ids, lstate.pending_results[lstate.pending_results_idx],
+			             current_device);
 			lstate.pending_results_idx++;
 			output_count++;
 		}
@@ -630,9 +618,8 @@ static bool ExecuteExactParentFIDPath(LustreLinksGlobalState &gstate, LustreLink
 				continue;
 			}
 
-			std::sort(entries.begin(), entries.end(), [](const DirEntry &left, const DirEntry &right) {
-				return left.ino < right.ino;
-			});
+			std::sort(entries.begin(), entries.end(),
+			          [](const DirEntry &left, const DirEntry &right) { return left.ino < right.ino; });
 
 			for (auto &entry : entries) {
 				LustreFID child_fid;
@@ -656,8 +643,8 @@ static bool ExecuteExactParentFIDPath(LustreLinksGlobalState &gstate, LustreLink
 // Sequential Scan Path - linear scan by block group
 //===----------------------------------------------------------------------===//
 
-static bool ExecuteSequentialPath(LustreLinksGlobalState &gstate, LustreLinksLocalState &lstate,
-                                  DataChunk &output, idx_t &output_count) {
+static bool ExecuteSequentialPath(LustreLinksGlobalState &gstate, LustreLinksLocalState &lstate, DataChunk &output,
+                                  idx_t &output_count) {
 	auto &filter = *gstate.link_filter;
 	const auto &current_device = gstate.device_paths[lstate.initialized_device_idx];
 
@@ -689,8 +676,7 @@ static bool ExecuteSequentialPath(LustreLinksGlobalState &gstate, LustreLinksLoc
 // Execute Function
 //===----------------------------------------------------------------------===//
 
-static void LustreLinksExecute(ClientContext &context, TableFunctionInput &data_p,
-                               DataChunk &output) {
+static void LustreLinksExecute(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
 	auto &gstate = data_p.global_state->Cast<LustreLinksGlobalState>();
 	auto &lstate = data_p.local_state->Cast<LustreLinksLocalState>();
 
@@ -744,9 +730,8 @@ static void LustreLinksExecute(ClientContext &context, TableFunctionInput &data_
 			lock_guard<mutex> lock(gstate.device_transition_lock);
 			idx_t current_dev = gstate.current_device_idx.load();
 			if (lstate.initialized_device_idx == current_dev &&
-			    (!gstate.use_sequential_scan ||
-			     (gstate.next_block_group.load() >= gstate.total_block_groups &&
-			      gstate.active_block_groups.load() == 0))) {
+			    (!gstate.use_sequential_scan || (gstate.next_block_group.load() >= gstate.total_block_groups &&
+			                                     gstate.active_block_groups.load() == 0))) {
 				gstate.device_initialized.store(false);
 				gstate.current_device_idx++;
 				gstate.next_fid_idx.store(0);
@@ -769,8 +754,7 @@ static void LustreLinksExecute(ClientContext &context, TableFunctionInput &data_
 // Cardinality Function
 //===----------------------------------------------------------------------===//
 
-static unique_ptr<NodeStatistics> LustreLinksCardinality(ClientContext &context,
-                                                         const FunctionData *bind_data_p) {
+static unique_ptr<NodeStatistics> LustreLinksCardinality(ClientContext &context, const FunctionData *bind_data_p) {
 	// Return a very large cardinality estimate to ensure the optimizer places
 	// lustre_links on the PROBE side of hash joins. This enables DynamicFilter
 	// pushdown from the BUILD side (e.g., REC_CTE_SCAN) into lustre_links,
@@ -794,8 +778,8 @@ TableFunctionSet LustreLinksFunction::GetFunctionSet() {
 	TableFunctionSet set("lustre_links");
 
 	// Overload 1: single device path (VARCHAR)
-	TableFunction single_func("lustre_links", {LogicalType::VARCHAR}, LustreLinksExecute,
-	                          LustreLinksBindSingle, LustreLinksInitGlobal, LustreLinksInitLocal);
+	TableFunction single_func("lustre_links", {LogicalType::VARCHAR}, LustreLinksExecute, LustreLinksBindSingle,
+	                          LustreLinksInitGlobal, LustreLinksInitLocal);
 	SetLinkCommonProperties(single_func);
 	set.AddFunction(std::move(single_func));
 

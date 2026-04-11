@@ -22,8 +22,7 @@ static void SortAndUniqueFIDs(vector<LustreFID> &fid_values) {
 	fid_values.erase(std::unique(fid_values.begin(), fid_values.end()), fid_values.end());
 }
 
-static void ParseFIDFilterColumn(const TableFilter &filter,
-                                 vector<LustreFID> &fid_values,
+static void ParseFIDFilterColumn(const TableFilter &filter, vector<LustreFID> &fid_values,
                                  vector<shared_ptr<DynamicFilterData>> *dynamic_fid_filters) {
 	switch (filter.filter_type) {
 	case TableFilterType::CONSTANT_COMPARISON: {
@@ -72,8 +71,7 @@ static void ParseFIDFilterColumn(const TableFilter &filter,
 		if (dynamic_filter.filter_data) {
 			lock_guard<mutex> lock(dynamic_filter.filter_data->lock);
 			if (dynamic_filter.filter_data->initialized && dynamic_filter.filter_data->filter) {
-				ParseFIDFilterColumn(*dynamic_filter.filter_data->filter,
-				                     fid_values, dynamic_fid_filters);
+				ParseFIDFilterColumn(*dynamic_filter.filter_data->filter, fid_values, dynamic_fid_filters);
 			} else if (dynamic_fid_filters) {
 				dynamic_fid_filters->push_back(dynamic_filter.filter_data);
 			}
@@ -86,8 +84,7 @@ static void ParseFIDFilterColumn(const TableFilter &filter,
 	}
 }
 
-unique_ptr<FIDOnlyFilter> FIDOnlyFilter::Create(const TableFilterSet *filters,
-                                                const vector<idx_t> &column_ids,
+unique_ptr<FIDOnlyFilter> FIDOnlyFilter::Create(const TableFilterSet *filters, const vector<idx_t> &column_ids,
                                                 idx_t fid_column_idx) {
 	auto result = make_uniq<FIDOnlyFilter>();
 
@@ -107,8 +104,7 @@ unique_ptr<FIDOnlyFilter> FIDOnlyFilter::Create(const TableFilterSet *filters,
 		if (!result->fid_predicate) {
 			result->fid_predicate = LustreStringFilter::Create(*entry.second);
 		}
-		ParseFIDFilterColumn(*entry.second, result->fid_values,
-		                     &result->dynamic_fid_filters);
+		ParseFIDFilterColumn(*entry.second, result->fid_values, &result->dynamic_fid_filters);
 	}
 
 	SortAndUniqueFIDs(result->fid_values);

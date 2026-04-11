@@ -109,5 +109,4 @@ extern "C" {
 DUCKDB_CPP_EXTENSION_ENTRY(lustre_query, loader) {
 	duckdb::LoadInternal(loader);
 }
-
 }

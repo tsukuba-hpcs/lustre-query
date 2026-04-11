@@ -41,15 +41,7 @@
 namespace duckdb {
 namespace lustre {
 
-enum class FusedRelationKind : uint8_t {
-	INODE,
-	LINK,
-	OBJECT,
-	LAYOUT,
-	DIRMAP,
-	LINK_DIRMAP,
-	OTHER
-};
+enum class FusedRelationKind : uint8_t { INODE, LINK, OBJECT, LAYOUT, DIRMAP, LINK_DIRMAP, OTHER };
 
 class LustreFusedInodeLinkJoin final : public LogicalExtensionOperator {
 public:
@@ -258,7 +250,8 @@ private:
 		}
 		case TableFilterType::OPTIONAL_FILTER: {
 			auto &optional_filter = filter.Cast<OptionalFilter>();
-			return !optional_filter.child_filter || IsStringFilterRewritable(*optional_filter.child_filter, allow_dynamic);
+			return !optional_filter.child_filter ||
+			       IsStringFilterRewritable(*optional_filter.child_filter, allow_dynamic);
 		}
 		default:
 			return false;
@@ -559,7 +552,8 @@ private:
 		return true;
 	}
 
-	static bool IsActualColumnReference(const unique_ptr<Expression> &expr, const SidePlanInfo &side, idx_t actual_column) {
+	static bool IsActualColumnReference(const unique_ptr<Expression> &expr, const SidePlanInfo &side,
+	                                    idx_t actual_column) {
 		if (!expr || expr->GetExpressionClass() != ExpressionClass::BOUND_COLUMN_REF) {
 			return false;
 		}
@@ -575,8 +569,8 @@ private:
 		return false;
 	}
 
-	static bool MatchesJoinColumnEquality(const JoinCondition &condition, const SidePlanInfo &left_side, idx_t left_column,
-	                                      const SidePlanInfo &right_side, idx_t right_column) {
+	static bool MatchesJoinColumnEquality(const JoinCondition &condition, const SidePlanInfo &left_side,
+	                                      idx_t left_column, const SidePlanInfo &right_side, idx_t right_column) {
 		if (condition.comparison != ExpressionType::COMPARE_EQUAL) {
 			return false;
 		}
@@ -712,7 +706,8 @@ private:
 		return result;
 	}
 
-	static unique_ptr<LogicalOperator> TryRewriteLinkRelationJoin(LogicalComparisonJoin &join, idx_t &next_table_index) {
+	static unique_ptr<LogicalOperator> TryRewriteLinkRelationJoin(LogicalComparisonJoin &join,
+	                                                              idx_t &next_table_index) {
 		if (join.join_type != JoinType::INNER || join.predicate || join.conditions.size() != 1) {
 			return nullptr;
 		}
@@ -773,10 +768,10 @@ private:
 		auto map_relation_column = [&](idx_t column_idx, bool is_link_side) -> idx_t {
 			if (is_link_side) {
 				return relation_kind == FusedRelationKind::OBJECT ? MapLinkObjectLinkColumn(column_idx)
-				                                                 : MapLinkLayoutLinkColumn(column_idx);
+				                                                  : MapLinkLayoutLinkColumn(column_idx);
 			}
 			return relation_kind == FusedRelationKind::OBJECT ? MapLinkObjectObjectColumn(column_idx)
-			                                                 : MapLinkLayoutLayoutColumn(column_idx);
+			                                                  : MapLinkLayoutLayoutColumn(column_idx);
 		};
 
 		auto &fused_types = relation_kind == FusedRelationKind::OBJECT ? LustreLinkObjectsFunction::GetColumnTypes()
@@ -932,23 +927,25 @@ private:
 			vector<unique_ptr<Expression>> select_list;
 			select_list.reserve(fused_output_columns.size());
 			for (idx_t i = 0; i < fused_output_columns.size(); i++) {
-				select_list.push_back(
-				    make_uniq<BoundColumnRefExpression>(fused_types[scan_columns[i]], ColumnBinding(next_table_index - 1, i)));
+				select_list.push_back(make_uniq<BoundColumnRefExpression>(fused_types[scan_columns[i]],
+				                                                          ColumnBinding(next_table_index - 1, i)));
 			}
 			auto projection = make_uniq<LogicalProjection>(next_table_index++, std::move(select_list));
 			projection->children.push_back(std::move(child_plan));
 			child_plan = std::move(projection);
 		}
 
-		auto replacement = make_uniq<LustreFusedInodeLinkJoin>(std::move(child_plan), std::move(output_bindings),
-		                                                       join.types, CollectTableIndexes(join.GetColumnBindings()));
+		auto replacement =
+		    make_uniq<LustreFusedInodeLinkJoin>(std::move(child_plan), std::move(output_bindings), join.types,
+		                                        CollectTableIndexes(join.GetColumnBindings()));
 		if (join.has_estimated_cardinality) {
 			replacement->SetEstimatedCardinality(join.estimated_cardinality);
 		}
 		return std::move(replacement);
 	}
 
-	static unique_ptr<LogicalOperator> TryRewriteObjectLayoutJoin(LogicalComparisonJoin &join, idx_t &next_table_index) {
+	static unique_ptr<LogicalOperator> TryRewriteObjectLayoutJoin(LogicalComparisonJoin &join,
+	                                                              idx_t &next_table_index) {
 		if (join.join_type != JoinType::INNER || join.predicate || join.conditions.size() != 2) {
 			return nullptr;
 		}
@@ -1022,8 +1019,8 @@ private:
 
 		auto append_columns = [&](const vector<idx_t> &columns, bool is_object_side) {
 			for (auto column_idx : columns) {
-				auto fused_idx = is_object_side ? MapObjectLayoutObjectColumn(column_idx)
-				                                : MapObjectLayoutLayoutColumn(column_idx);
+				auto fused_idx =
+				    is_object_side ? MapObjectLayoutObjectColumn(column_idx) : MapObjectLayoutLayoutColumn(column_idx);
 				if (fused_idx == DConstants::INVALID_INDEX) {
 					return false;
 				}
@@ -1168,16 +1165,18 @@ private:
 			vector<unique_ptr<Expression>> select_list;
 			select_list.reserve(fused_output_columns.size());
 			for (idx_t i = 0; i < fused_output_columns.size(); i++) {
-				select_list.push_back(make_uniq<BoundColumnRefExpression>(
-				    LustreObjectLayoutsFunction::GetColumnTypes()[scan_columns[i]], ColumnBinding(next_table_index - 1, i)));
+				select_list.push_back(
+				    make_uniq<BoundColumnRefExpression>(LustreObjectLayoutsFunction::GetColumnTypes()[scan_columns[i]],
+				                                        ColumnBinding(next_table_index - 1, i)));
 			}
 			auto projection = make_uniq<LogicalProjection>(next_table_index++, std::move(select_list));
 			projection->children.push_back(std::move(child_plan));
 			child_plan = std::move(projection);
 		}
 
-		auto replacement = make_uniq<LustreFusedInodeLinkJoin>(std::move(child_plan), std::move(output_bindings),
-		                                                       join.types, CollectTableIndexes(join.GetColumnBindings()));
+		auto replacement =
+		    make_uniq<LustreFusedInodeLinkJoin>(std::move(child_plan), std::move(output_bindings), join.types,
+		                                        CollectTableIndexes(join.GetColumnBindings()));
 		if (join.has_estimated_cardinality) {
 			replacement->SetEstimatedCardinality(join.estimated_cardinality);
 		}
@@ -1343,8 +1342,7 @@ private:
 		bind_data.inode_link_join_on_parent_fid = relation_kind == FusedRelationKind::LINK && join_on_parent_fid;
 		auto fused_function = GetFusedFunction(relation_kind, bind_data.device_paths.size() > 1);
 		auto fused_get = make_uniq<LogicalGet>(next_table_index, fused_function, std::move(fused_bind_data),
-		                                       GetFusedColumnTypes(relation_kind),
-		                                       GetFusedColumnNames(relation_kind));
+		                                       GetFusedColumnTypes(relation_kind), GetFusedColumnNames(relation_kind));
 		next_table_index++;
 		vector<ColumnIndex> column_ids;
 		column_ids.reserve(scan_columns.size());
@@ -1397,16 +1395,17 @@ private:
 			vector<unique_ptr<Expression>> select_list;
 			select_list.reserve(fused_output_columns.size());
 			for (idx_t i = 0; i < fused_output_columns.size(); i++) {
-				select_list.push_back(make_uniq<BoundColumnRefExpression>(GetFusedColumnTypes(relation_kind)[scan_columns[i]],
-				                                                         ColumnBinding(next_table_index - 1, i)));
+				select_list.push_back(make_uniq<BoundColumnRefExpression>(
+				    GetFusedColumnTypes(relation_kind)[scan_columns[i]], ColumnBinding(next_table_index - 1, i)));
 			}
 			auto projection = make_uniq<LogicalProjection>(next_table_index++, std::move(select_list));
 			projection->children.push_back(std::move(child_plan));
 			child_plan = std::move(projection);
 		}
 
-		auto replacement = make_uniq<LustreFusedInodeLinkJoin>(std::move(child_plan), std::move(output_bindings),
-		                                                       join.types, CollectTableIndexes(join.GetColumnBindings()));
+		auto replacement =
+		    make_uniq<LustreFusedInodeLinkJoin>(std::move(child_plan), std::move(output_bindings), join.types,
+		                                        CollectTableIndexes(join.GetColumnBindings()));
 		if (join.has_estimated_cardinality) {
 			replacement->SetEstimatedCardinality(join.estimated_cardinality);
 		}
@@ -1416,13 +1415,11 @@ private:
 	// Helper: build a fused LogicalGet + wrapper from a 2-way dirmap join.
 	// map_left_fn / map_right_fn translate original column indices to fused column indices.
 	// fused_types / fused_names / fused_function describe the target fused table function.
-	static unique_ptr<LogicalOperator> BuildDirMapFusedPlan(
-	    LogicalComparisonJoin &join, SidePlanInfo &left_side, SidePlanInfo &right_side,
-	    LogicalGet &left_get, LogicalGet &right_get,
-	    const std::function<idx_t(idx_t, bool)> &map_column,
-	    const vector<LogicalType> &fused_types, const vector<string> &fused_names,
-	    TableFunction fused_function, idx_t &next_table_index) {
-
+	static unique_ptr<LogicalOperator>
+	BuildDirMapFusedPlan(LogicalComparisonJoin &join, SidePlanInfo &left_side, SidePlanInfo &right_side,
+	                     LogicalGet &left_get, LogicalGet &right_get,
+	                     const std::function<idx_t(idx_t, bool)> &map_column, const vector<LogicalType> &fused_types,
+	                     const vector<string> &fused_names, TableFunction fused_function, idx_t &next_table_index) {
 		auto left_columns = GetJoinOutputActualColumns(left_side.visible_actual_columns, join.left_projection_map);
 		auto right_columns = GetJoinOutputActualColumns(right_side.visible_actual_columns, join.right_projection_map);
 		if ((join.left_projection_map.empty() && left_side.root_bindings.empty()) ||
@@ -1435,28 +1432,33 @@ private:
 		auto append = [&](const vector<idx_t> &cols, bool is_left) {
 			for (auto c : cols) {
 				auto f = map_column(c, is_left);
-				if (f == DConstants::INVALID_INDEX) return false;
+				if (f == DConstants::INVALID_INDEX)
+					return false;
 				fused_output_columns.push_back(f);
 			}
 			return true;
 		};
-		if (!append(left_columns, true) || !append(right_columns, false)) return nullptr;
+		if (!append(left_columns, true) || !append(right_columns, false))
+			return nullptr;
 
 		auto output_bindings = join.GetColumnBindings();
-		if (output_bindings.empty() || output_bindings.size() != fused_output_columns.size()) return nullptr;
+		if (output_bindings.empty() || output_bindings.size() != fused_output_columns.size())
+			return nullptr;
 
 		auto translate_filters = [&](const LogicalGet &src, bool is_left) -> unique_ptr<TableFilterSet> {
 			auto r = make_uniq<TableFilterSet>();
 			for (const auto &e : src.table_filters.filters) {
 				auto m = map_column(e.first, is_left);
-				if (m == DConstants::INVALID_INDEX) return nullptr;
+				if (m == DConstants::INVALID_INDEX)
+					return nullptr;
 				r->filters[m] = e.second->Copy();
 			}
 			return r;
 		};
 		auto lf = translate_filters(left_get, true);
 		auto rf = translate_filters(right_get, false);
-		if (!lf || !rf) return nullptr;
+		if (!lf || !rf)
+			return nullptr;
 
 		TableFilterSet fused_filters;
 		MergeFilters(fused_filters, *lf);
@@ -1466,43 +1468,55 @@ private:
 		auto reg = [&](const SidePlanInfo &side, bool is_left) {
 			for (const auto &e : side.binding_to_actual_column) {
 				auto f = map_column(e.second, is_left);
-				if (f == DConstants::INVALID_INDEX) return false;
+				if (f == DConstants::INVALID_INDEX)
+					return false;
 				root_binding_to_fused[e.first] = f;
 			}
 			return true;
 		};
-		if (!reg(left_side, true) || !reg(right_side, false)) return nullptr;
+		if (!reg(left_side, true) || !reg(right_side, false))
+			return nullptr;
 
 		vector<idx_t> scan_columns;
 		scan_columns.reserve(fused_output_columns.size() + fused_filters.filters.size());
-		for (auto f : fused_output_columns) GetOrAddColumn(scan_columns, f);
-		for (const auto &e : fused_filters.filters) GetOrAddColumn(scan_columns, e.first);
+		for (auto f : fused_output_columns)
+			GetOrAddColumn(scan_columns, f);
+		for (const auto &e : fused_filters.filters)
+			GetOrAddColumn(scan_columns, e.first);
 		auto add_fc = [&](const vector<unique_ptr<Expression>> &filters) {
 			for (const auto &expr : filters) {
 				bool ok = true;
 				EnumerateBoundColumnRefs(*expr, [&](BoundColumnRefExpression &cr) {
 					auto it = root_binding_to_fused.find(cr.binding);
-					if (it == root_binding_to_fused.end()) { ok = false; return; }
+					if (it == root_binding_to_fused.end()) {
+						ok = false;
+						return;
+					}
 					GetOrAddColumn(scan_columns, it->second);
 				});
-				if (!ok) return false;
+				if (!ok)
+					return false;
 			}
 			return true;
 		};
-		if (!add_fc(left_side.hoisted_filters) || !add_fc(right_side.hoisted_filters)) return nullptr;
+		if (!add_fc(left_side.hoisted_filters) || !add_fc(right_side.hoisted_filters))
+			return nullptr;
 
 		auto fused_bind = left_get.bind_data->Copy();
-		auto fused_get = make_uniq<LogicalGet>(next_table_index, fused_function, std::move(fused_bind),
-		                                       fused_types, fused_names);
+		auto fused_get =
+		    make_uniq<LogicalGet>(next_table_index, fused_function, std::move(fused_bind), fused_types, fused_names);
 		next_table_index++;
 		vector<ColumnIndex> col_ids;
-		for (auto f : scan_columns) col_ids.emplace_back(f);
+		for (auto f : scan_columns)
+			col_ids.emplace_back(f);
 		fused_get->SetColumnIds(std::move(col_ids));
 		fused_get->table_filters = std::move(fused_filters);
-		if (join.has_estimated_cardinality) fused_get->SetEstimatedCardinality(join.estimated_cardinality);
+		if (join.has_estimated_cardinality)
+			fused_get->SetEstimatedCardinality(join.estimated_cardinality);
 
 		unordered_map<idx_t, idx_t> fused_to_scan;
-		for (idx_t i = 0; i < scan_columns.size(); i++) fused_to_scan[scan_columns[i]] = i;
+		for (idx_t i = 0; i < scan_columns.size(); i++)
+			fused_to_scan[scan_columns[i]] = i;
 
 		column_binding_map_t<ColumnBinding> root_to_child;
 		for (const auto &e : root_binding_to_fused) {
@@ -1516,12 +1530,14 @@ private:
 		auto app = [&](const vector<unique_ptr<Expression>> &src) {
 			for (const auto &expr : src) {
 				auto c = expr->Copy();
-				if (!RewriteBindingReferences(c, root_to_child)) return false;
+				if (!RewriteBindingReferences(c, root_to_child))
+					return false;
 				hoisted.push_back(std::move(c));
 			}
 			return true;
 		};
-		if (!app(left_side.hoisted_filters) || !app(right_side.hoisted_filters)) return nullptr;
+		if (!app(left_side.hoisted_filters) || !app(right_side.hoisted_filters))
+			return nullptr;
 		if (!hoisted.empty()) {
 			auto f = make_uniq<LogicalFilter>();
 			f->expressions = std::move(hoisted);
@@ -1534,28 +1550,34 @@ private:
 			sl.reserve(fused_output_columns.size());
 			for (idx_t i = 0; i < fused_output_columns.size(); i++) {
 				sl.push_back(make_uniq<BoundColumnRefExpression>(fused_types[scan_columns[i]],
-				             ColumnBinding(next_table_index - 1, i)));
+				                                                 ColumnBinding(next_table_index - 1, i)));
 			}
 			auto proj = make_uniq<LogicalProjection>(next_table_index++, std::move(sl));
 			proj->children.push_back(std::move(child_plan));
 			child_plan = std::move(proj);
 		}
 
-		auto replacement = make_uniq<LustreFusedInodeLinkJoin>(std::move(child_plan), std::move(output_bindings),
-		                                                       join.types, CollectTableIndexes(join.GetColumnBindings()));
-		if (join.has_estimated_cardinality) replacement->SetEstimatedCardinality(join.estimated_cardinality);
+		auto replacement =
+		    make_uniq<LustreFusedInodeLinkJoin>(std::move(child_plan), std::move(output_bindings), join.types,
+		                                        CollectTableIndexes(join.GetColumnBindings()));
+		if (join.has_estimated_cardinality)
+			replacement->SetEstimatedCardinality(join.estimated_cardinality);
 		return std::move(replacement);
 	}
 
 	// Level 1: links JOIN dirmap ON parent_fid → link_dirmap
 	// Level 2: inodes JOIN dirmap ON fid = dir_fid → inode_dirmap
 	static unique_ptr<LogicalOperator> TryRewriteDirMapJoin(LogicalComparisonJoin &join, idx_t &next_table_index) {
-		if (join.join_type != JoinType::INNER || join.predicate || join.conditions.size() != 1) return nullptr;
-		if (join.children.size() != 2) return nullptr;
+		if (join.join_type != JoinType::INNER || join.predicate || join.conditions.size() != 1)
+			return nullptr;
+		if (join.children.size() != 2)
+			return nullptr;
 
 		SidePlanInfo left_side, right_side;
-		if (!ExtractSidePlan(*join.children[0], left_side) || !ExtractSidePlan(*join.children[1], right_side)) return nullptr;
-		if (!left_side.get || !right_side.get) return nullptr;
+		if (!ExtractSidePlan(*join.children[0], left_side) || !ExtractSidePlan(*join.children[1], right_side))
+			return nullptr;
+		if (!left_side.get || !right_side.get)
+			return nullptr;
 
 		auto &left_get = *left_side.get;
 		auto &right_get = *right_side.get;
@@ -1564,7 +1586,8 @@ private:
 
 		bool left_is_dirmap = left_kind == FusedRelationKind::DIRMAP;
 		bool right_is_dirmap = right_kind == FusedRelationKind::DIRMAP;
-		if (left_is_dirmap == right_is_dirmap) return nullptr;
+		if (left_is_dirmap == right_is_dirmap)
+			return nullptr;
 
 		auto other_kind = left_is_dirmap ? right_kind : left_kind;
 		auto &dirmap_get = left_is_dirmap ? left_get : right_get;
@@ -1572,45 +1595,51 @@ private:
 		auto &dirmap_side = left_is_dirmap ? left_side : right_side;
 		auto &other_side = left_is_dirmap ? right_side : left_side;
 
-		if (!dirmap_get.bind_data || !other_get.bind_data) return nullptr;
-		if (!BindDataDevicePathsMatch(dirmap_get, other_get)) return nullptr;
-		if (!HasOnlyRewriteSafeFilters(dirmap_get, FusedRelationKind::DIRMAP)) return nullptr;
+		if (!dirmap_get.bind_data || !other_get.bind_data)
+			return nullptr;
+		if (!BindDataDevicePathsMatch(dirmap_get, other_get))
+			return nullptr;
+		if (!HasOnlyRewriteSafeFilters(dirmap_get, FusedRelationKind::DIRMAP))
+			return nullptr;
 
 		auto &cond = join.conditions[0];
-		if (cond.comparison != ExpressionType::COMPARE_EQUAL) return nullptr;
+		if (cond.comparison != ExpressionType::COMPARE_EQUAL)
+			return nullptr;
 
 		if (other_kind == FusedRelationKind::LINK) {
 			// Level 1: links.parent_fid(1) = dirmap.parent_fid(1)
-			if (!HasOnlyRewriteSafeFilters(other_get, FusedRelationKind::LINK)) return nullptr;
-			if (!MatchesJoinColumnEquality(cond, other_side, 1, dirmap_side, 1)) return nullptr;
+			if (!HasOnlyRewriteSafeFilters(other_get, FusedRelationKind::LINK))
+				return nullptr;
+			if (!MatchesJoinColumnEquality(cond, other_side, 1, dirmap_side, 1))
+				return nullptr;
 
 			auto &bind = other_get.bind_data->Cast<LustreQueryBindData>();
 			auto map_col = [&](idx_t c, bool is_left) -> idx_t {
 				bool is_link = (is_left && !left_is_dirmap) || (!is_left && left_is_dirmap);
 				return is_link ? MapLinkDirMapLinkColumn(c) : MapLinkDirMapDirMapColumn(c);
 			};
-			return BuildDirMapFusedPlan(join, left_side, right_side, left_get, right_get, map_col,
-			                            LustreLinkDirMapFunction::GetColumnTypes(),
-			                            LustreLinkDirMapFunction::GetColumnNames(),
-			                            LustreLinkDirMapFunction::GetFunction(bind.device_paths.size() > 1),
-			                            next_table_index);
+			return BuildDirMapFusedPlan(
+			    join, left_side, right_side, left_get, right_get, map_col, LustreLinkDirMapFunction::GetColumnTypes(),
+			    LustreLinkDirMapFunction::GetColumnNames(),
+			    LustreLinkDirMapFunction::GetFunction(bind.device_paths.size() > 1), next_table_index);
 		}
 
 		if (other_kind == FusedRelationKind::INODE) {
 			// Level 2: inodes.fid(0) = dirmap.dir_fid(0)
-			if (!HasOnlyRewriteSafeFilters(other_get, FusedRelationKind::INODE)) return nullptr;
-			if (!MatchesJoinColumnEquality(cond, other_side, 0, dirmap_side, 0)) return nullptr;
+			if (!HasOnlyRewriteSafeFilters(other_get, FusedRelationKind::INODE))
+				return nullptr;
+			if (!MatchesJoinColumnEquality(cond, other_side, 0, dirmap_side, 0))
+				return nullptr;
 
 			auto &bind = other_get.bind_data->Cast<LustreQueryBindData>();
 			auto map_col = [&](idx_t c, bool is_left) -> idx_t {
 				bool is_inode = (is_left && !left_is_dirmap) || (!is_left && left_is_dirmap);
 				return is_inode ? MapInodeDirMapInodeColumn(c) : MapInodeDirMapDirMapColumn(c);
 			};
-			return BuildDirMapFusedPlan(join, left_side, right_side, left_get, right_get, map_col,
-			                            LustreInodeDirMapFunction::GetColumnTypes(),
-			                            LustreInodeDirMapFunction::GetColumnNames(),
-			                            LustreInodeDirMapFunction::GetFunction(bind.device_paths.size() > 1),
-			                            next_table_index);
+			return BuildDirMapFusedPlan(
+			    join, left_side, right_side, left_get, right_get, map_col, LustreInodeDirMapFunction::GetColumnTypes(),
+			    LustreInodeDirMapFunction::GetColumnNames(),
+			    LustreInodeDirMapFunction::GetFunction(bind.device_paths.size() > 1), next_table_index);
 		}
 
 		return nullptr;
@@ -1623,7 +1652,8 @@ private:
 		if (outer_join.join_type != JoinType::INNER || outer_join.predicate || outer_join.conditions.size() != 1) {
 			return nullptr;
 		}
-		if (outer_join.children.size() != 2) return nullptr;
+		if (outer_join.children.size() != 2)
+			return nullptr;
 
 		// One child must be another comparison join
 		LogicalComparisonJoin *inner_join = nullptr;
@@ -1648,12 +1678,12 @@ private:
 
 		// Extract all three leaf tables
 		SidePlanInfo side_a, side_b, side_c;
-		if (!ExtractSidePlan(*inner_join->children[0], side_a) ||
-		    !ExtractSidePlan(*inner_join->children[1], side_b) ||
+		if (!ExtractSidePlan(*inner_join->children[0], side_a) || !ExtractSidePlan(*inner_join->children[1], side_b) ||
 		    !ExtractSidePlan(*third_op, side_c)) {
 			return nullptr;
 		}
-		if (!side_a.get || !side_b.get || !side_c.get) return nullptr;
+		if (!side_a.get || !side_b.get || !side_c.get)
+			return nullptr;
 
 		auto kind_a = GetRelationKind(*side_a.get);
 		auto kind_b = GetRelationKind(*side_b.get);
@@ -1661,21 +1691,28 @@ private:
 
 		// Identify link, dirmap, inode sides
 		SidePlanInfo *link_side = nullptr, *dirmap_side = nullptr, *inode_side = nullptr;
-		struct { SidePlanInfo *s; FusedRelationKind k; } sides[] = {
-			{&side_a, kind_a}, {&side_b, kind_b}, {&side_c, kind_c}
-		};
+		struct {
+			SidePlanInfo *s;
+			FusedRelationKind k;
+		} sides[] = {{&side_a, kind_a}, {&side_b, kind_b}, {&side_c, kind_c}};
 		for (auto &e : sides) {
-			if (e.k == FusedRelationKind::LINK && !link_side) link_side = e.s;
-			else if (e.k == FusedRelationKind::DIRMAP && !dirmap_side) dirmap_side = e.s;
-			else if (e.k == FusedRelationKind::INODE && !inode_side) inode_side = e.s;
+			if (e.k == FusedRelationKind::LINK && !link_side)
+				link_side = e.s;
+			else if (e.k == FusedRelationKind::DIRMAP && !dirmap_side)
+				dirmap_side = e.s;
+			else if (e.k == FusedRelationKind::INODE && !inode_side)
+				inode_side = e.s;
 		}
-		if (!link_side || !dirmap_side || !inode_side) return nullptr;
+		if (!link_side || !dirmap_side || !inode_side)
+			return nullptr;
 
 		auto *link_get = link_side->get;
 		auto *dirmap_get = dirmap_side->get;
 		auto *inode_get = inode_side->get;
-		if (!link_get->bind_data || !dirmap_get->bind_data || !inode_get->bind_data) return nullptr;
-		if (!BindDataDevicePathsMatch(*link_get, *dirmap_get) || !BindDataDevicePathsMatch(*link_get, *inode_get)) return nullptr;
+		if (!link_get->bind_data || !dirmap_get->bind_data || !inode_get->bind_data)
+			return nullptr;
+		if (!BindDataDevicePathsMatch(*link_get, *dirmap_get) || !BindDataDevicePathsMatch(*link_get, *inode_get))
+			return nullptr;
 		if (!HasOnlyRewriteSafeFilters(*link_get, FusedRelationKind::LINK) ||
 		    !HasOnlyRewriteSafeFilters(*dirmap_get, FusedRelationKind::DIRMAP) ||
 		    !HasOnlyRewriteSafeFilters(*inode_get, FusedRelationKind::INODE)) {
@@ -1702,14 +1739,12 @@ private:
 
 		// Check if inner connects link.parent_fid = dirmap.parent_fid
 		if (MatchesJoinColumnEquality(inner_cond, *link_side, 1, *dirmap_side, 1) &&
-		    (link_side == &side_a || link_side == &side_b) &&
-		    (dirmap_side == &side_a || dirmap_side == &side_b)) {
+		    (link_side == &side_a || link_side == &side_b) && (dirmap_side == &side_a || dirmap_side == &side_b)) {
 			inner_has_link_dirmap = true;
 		}
 		// Check if inner connects dirmap.dir_fid = inode.fid
 		if (MatchesJoinColumnEquality(inner_cond, *dirmap_side, 0, *inode_side, 0) &&
-		    (dirmap_side == &side_a || dirmap_side == &side_b) &&
-		    (inode_side == &side_a || inode_side == &side_b)) {
+		    (dirmap_side == &side_a || dirmap_side == &side_b) && (inode_side == &side_a || inode_side == &side_b)) {
 			inner_has_dirmap_inode = true;
 		}
 
@@ -1736,9 +1771,10 @@ private:
 		}
 
 		// We need exactly one link-dirmap and one dirmap-inode condition
-		bool has_both = (inner_has_link_dirmap && outer_has_dirmap_inode) ||
-		                (inner_has_dirmap_inode && outer_has_link_dirmap);
-		if (!has_both) return nullptr;
+		bool has_both =
+		    (inner_has_link_dirmap && outer_has_dirmap_inode) || (inner_has_dirmap_inode && outer_has_link_dirmap);
+		if (!has_both)
+			return nullptr;
 
 		// Build the 3-way fused function
 		// Output: link columns from outer join + dirmap columns + inode columns
@@ -1747,8 +1783,9 @@ private:
 
 		// Compute the outer join's output column mapping
 		auto outer_left_columns = GetJoinOutputActualColumns(
-			(inner_is_left ? inner_join->GetColumnBindings().size() > 0 ? std::vector<idx_t>{} : std::vector<idx_t>{} : side_c.visible_actual_columns),
-			{});
+		    (inner_is_left ? inner_join->GetColumnBindings().size() > 0 ? std::vector<idx_t> {} : std::vector<idx_t> {}
+		                   : side_c.visible_actual_columns),
+		    {});
 
 		// This is getting very complex for a general solution.
 		// Let's take a pragmatic shortcut: if the pattern matches, build the fused plan
@@ -1756,16 +1793,21 @@ private:
 
 		auto map_col_3way = [&](idx_t c, FusedRelationKind kind) -> idx_t {
 			switch (kind) {
-			case FusedRelationKind::LINK: return MapLinkInodeDirMapLinkColumn(c);
-			case FusedRelationKind::DIRMAP: return MapLinkInodeDirMapDirMapColumn(c);
-			case FusedRelationKind::INODE: return MapLinkInodeDirMapInodeColumn(c);
-			default: return DConstants::INVALID_INDEX;
+			case FusedRelationKind::LINK:
+				return MapLinkInodeDirMapLinkColumn(c);
+			case FusedRelationKind::DIRMAP:
+				return MapLinkInodeDirMapDirMapColumn(c);
+			case FusedRelationKind::INODE:
+				return MapLinkInodeDirMapInodeColumn(c);
+			default:
+				return DConstants::INVALID_INDEX;
 			}
 		};
 
 		// Gather all output columns from the outer join
 		auto outer_output_bindings = outer_join.GetColumnBindings();
-		if (outer_output_bindings.empty()) return nullptr;
+		if (outer_output_bindings.empty())
+			return nullptr;
 
 		// Map each outer output binding to a fused column
 		// The outer join's output bindings reference the inner join's output + side_c's output
@@ -1776,15 +1818,18 @@ private:
 		column_binding_map_t<idx_t> all_binding_to_fused;
 		for (const auto &e : link_side->binding_to_actual_column) {
 			auto f = map_col_3way(e.second, FusedRelationKind::LINK);
-			if (f != DConstants::INVALID_INDEX) all_binding_to_fused[e.first] = f;
+			if (f != DConstants::INVALID_INDEX)
+				all_binding_to_fused[e.first] = f;
 		}
 		for (const auto &e : dirmap_side->binding_to_actual_column) {
 			auto f = map_col_3way(e.second, FusedRelationKind::DIRMAP);
-			if (f != DConstants::INVALID_INDEX) all_binding_to_fused[e.first] = f;
+			if (f != DConstants::INVALID_INDEX)
+				all_binding_to_fused[e.first] = f;
 		}
 		for (const auto &e : inode_side->binding_to_actual_column) {
 			auto f = map_col_3way(e.second, FusedRelationKind::INODE);
-			if (f != DConstants::INVALID_INDEX) all_binding_to_fused[e.first] = f;
+			if (f != DConstants::INVALID_INDEX)
+				all_binding_to_fused[e.first] = f;
 		}
 
 		// Trace outer join output bindings through inner join to leaf tables
@@ -1796,10 +1841,12 @@ private:
 
 		// Apply outer join projection maps
 		auto get_proj = [](const vector<ColumnBinding> &bindings, const vector<idx_t> &proj_map) {
-			if (proj_map.empty()) return bindings;
+			if (proj_map.empty())
+				return bindings;
 			vector<ColumnBinding> result;
 			for (auto p : proj_map) {
-				if (p < bindings.size()) result.push_back(bindings[p]);
+				if (p < bindings.size())
+					result.push_back(bindings[p]);
 			}
 			return result;
 		};
@@ -1809,7 +1856,8 @@ private:
 		vector<idx_t> fused_output_columns;
 		auto trace_binding = [&](const ColumnBinding &b) -> idx_t {
 			auto it = all_binding_to_fused.find(b);
-			if (it != all_binding_to_fused.end()) return it->second;
+			if (it != all_binding_to_fused.end())
+				return it->second;
 
 			// May be from inner join output - trace through inner join
 			for (idx_t i = 0; i < inner_output_bindings.size(); i++) {
@@ -1822,10 +1870,12 @@ private:
 					auto inner_right = get_proj(inner_right_bindings_raw, inner_join->right_projection_map);
 					if (i < inner_left.size()) {
 						auto it2 = all_binding_to_fused.find(inner_left[i]);
-						if (it2 != all_binding_to_fused.end()) return it2->second;
+						if (it2 != all_binding_to_fused.end())
+							return it2->second;
 					} else if (i - inner_left.size() < inner_right.size()) {
 						auto it2 = all_binding_to_fused.find(inner_right[i - inner_left.size()]);
-						if (it2 != all_binding_to_fused.end()) return it2->second;
+						if (it2 != all_binding_to_fused.end())
+							return it2->second;
 					}
 				}
 			}
@@ -1834,16 +1884,19 @@ private:
 
 		for (auto &b : outer_left_bindings) {
 			auto f = trace_binding(b);
-			if (f == DConstants::INVALID_INDEX) return nullptr;
+			if (f == DConstants::INVALID_INDEX)
+				return nullptr;
 			fused_output_columns.push_back(f);
 		}
 		for (auto &b : outer_right_bindings) {
 			auto f = trace_binding(b);
-			if (f == DConstants::INVALID_INDEX) return nullptr;
+			if (f == DConstants::INVALID_INDEX)
+				return nullptr;
 			fused_output_columns.push_back(f);
 		}
 
-		if (fused_output_columns.size() != outer_output_bindings.size()) return nullptr;
+		if (fused_output_columns.size() != outer_output_bindings.size())
+			return nullptr;
 
 		// Build the fused LogicalGet
 		auto &fused_types_ref = LustreLinkInodeDirMapFunction::GetColumnTypes();
@@ -1851,44 +1904,52 @@ private:
 		auto fused_function = LustreLinkInodeDirMapFunction::GetFunction(bind.device_paths.size() > 1);
 
 		vector<idx_t> scan_columns;
-		for (auto f : fused_output_columns) GetOrAddColumn(scan_columns, f);
+		for (auto f : fused_output_columns)
+			GetOrAddColumn(scan_columns, f);
 
 		// Translate filters from all three tables
 		for (const auto &e : link_get->table_filters.filters) {
 			auto m = map_col_3way(e.first, FusedRelationKind::LINK);
-			if (m != DConstants::INVALID_INDEX) GetOrAddColumn(scan_columns, m);
+			if (m != DConstants::INVALID_INDEX)
+				GetOrAddColumn(scan_columns, m);
 		}
 		for (const auto &e : dirmap_get->table_filters.filters) {
 			auto m = map_col_3way(e.first, FusedRelationKind::DIRMAP);
-			if (m != DConstants::INVALID_INDEX) GetOrAddColumn(scan_columns, m);
+			if (m != DConstants::INVALID_INDEX)
+				GetOrAddColumn(scan_columns, m);
 		}
 		for (const auto &e : inode_get->table_filters.filters) {
 			auto m = map_col_3way(e.first, FusedRelationKind::INODE);
-			if (m != DConstants::INVALID_INDEX) GetOrAddColumn(scan_columns, m);
+			if (m != DConstants::INVALID_INDEX)
+				GetOrAddColumn(scan_columns, m);
 		}
 
 		auto fused_bind = link_get->bind_data->Copy();
-		auto fused_get = make_uniq<LogicalGet>(next_table_index, fused_function, std::move(fused_bind),
-		                                       fused_types_ref, fused_names_ref);
+		auto fused_get = make_uniq<LogicalGet>(next_table_index, fused_function, std::move(fused_bind), fused_types_ref,
+		                                       fused_names_ref);
 		next_table_index++;
 
 		vector<ColumnIndex> col_ids;
-		for (auto f : scan_columns) col_ids.emplace_back(f);
+		for (auto f : scan_columns)
+			col_ids.emplace_back(f);
 		fused_get->SetColumnIds(std::move(col_ids));
 
 		// Merge all filters
 		TableFilterSet fused_filters;
 		for (const auto &e : link_get->table_filters.filters) {
 			auto m = map_col_3way(e.first, FusedRelationKind::LINK);
-			if (m != DConstants::INVALID_INDEX) fused_filters.filters[m] = e.second->Copy();
+			if (m != DConstants::INVALID_INDEX)
+				fused_filters.filters[m] = e.second->Copy();
 		}
 		for (const auto &e : dirmap_get->table_filters.filters) {
 			auto m = map_col_3way(e.first, FusedRelationKind::DIRMAP);
-			if (m != DConstants::INVALID_INDEX) fused_filters.filters[m] = e.second->Copy();
+			if (m != DConstants::INVALID_INDEX)
+				fused_filters.filters[m] = e.second->Copy();
 		}
 		for (const auto &e : inode_get->table_filters.filters) {
 			auto m = map_col_3way(e.first, FusedRelationKind::INODE);
-			if (m != DConstants::INVALID_INDEX) fused_filters.filters[m] = e.second->Copy();
+			if (m != DConstants::INVALID_INDEX)
+				fused_filters.filters[m] = e.second->Copy();
 		}
 		fused_get->table_filters = std::move(fused_filters);
 
@@ -1898,7 +1959,8 @@ private:
 
 		// Build scan position map
 		unordered_map<idx_t, idx_t> fused_to_scan;
-		for (idx_t i = 0; i < scan_columns.size(); i++) fused_to_scan[scan_columns[i]] = i;
+		for (idx_t i = 0; i < scan_columns.size(); i++)
+			fused_to_scan[scan_columns[i]] = i;
 
 		// Map outer output bindings to fused scan positions
 		// Use the traced fused_output_columns
@@ -1909,18 +1971,19 @@ private:
 			vector<unique_ptr<Expression>> sl;
 			for (idx_t i = 0; i < fused_output_columns.size(); i++) {
 				auto it = fused_to_scan.find(fused_output_columns[i]);
-				if (it == fused_to_scan.end()) return nullptr;
+				if (it == fused_to_scan.end())
+					return nullptr;
 				sl.push_back(make_uniq<BoundColumnRefExpression>(fused_types_ref[fused_output_columns[i]],
-				             ColumnBinding(next_table_index - 1, it->second)));
+				                                                 ColumnBinding(next_table_index - 1, it->second)));
 			}
 			auto proj = make_uniq<LogicalProjection>(next_table_index++, std::move(sl));
 			proj->children.push_back(std::move(child_plan));
 			child_plan = std::move(proj);
 		}
 
-		auto replacement = make_uniq<LustreFusedInodeLinkJoin>(std::move(child_plan), std::move(outer_output_bindings),
-		                                                       outer_join.types,
-		                                                       CollectTableIndexes(outer_join.GetColumnBindings()));
+		auto replacement =
+		    make_uniq<LustreFusedInodeLinkJoin>(std::move(child_plan), std::move(outer_output_bindings),
+		                                        outer_join.types, CollectTableIndexes(outer_join.GetColumnBindings()));
 		if (outer_join.has_estimated_cardinality) {
 			replacement->SetEstimatedCardinality(outer_join.estimated_cardinality);
 		}

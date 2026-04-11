@@ -31,12 +31,12 @@ namespace lustre {
 static constexpr idx_t LINK_OBJECT_EXACT_LOOKUP_BATCH_SIZE = 512;
 static constexpr idx_t LINK_OBJECT_SEQ_SCAN_THRESHOLD = 8192;
 
-static const vector<string> LINK_OBJECT_COLUMN_NAMES = {
-    "link_fid", "parent_fid", "name", "object_fid", "comp_index",
-    "stripe_index", "ost_idx", "ost_oi_id", "ost_oi_seq", "object_device"};
+static const vector<string> LINK_OBJECT_COLUMN_NAMES = {"link_fid",   "parent_fid",   "name",    "object_fid",
+                                                        "comp_index", "stripe_index", "ost_idx", "ost_oi_id",
+                                                        "ost_oi_seq", "object_device"};
 
 static const vector<LogicalType> LINK_OBJECT_COLUMN_TYPES = {
-    LogicalType::VARCHAR,  LogicalType::VARCHAR, LogicalType::VARCHAR,  LogicalType::VARCHAR, LogicalType::UINTEGER,
+    LogicalType::VARCHAR,  LogicalType::VARCHAR,  LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::UINTEGER,
     LogicalType::UINTEGER, LogicalType::UINTEGER, LogicalType::UBIGINT, LogicalType::UBIGINT, LogicalType::VARCHAR};
 
 struct LustreLinkObjectRow {
@@ -57,9 +57,10 @@ struct LustreLinkObjectsFilter {
 	bool HasDynamicFilter() const {
 		return (link_filter && link_filter->HasDynamicFilter()) ||
 		       (object_fid_filter && object_fid_filter->HasDynamicFilter()) ||
-		       std::any_of(object_filters.begin(), object_filters.end(), [](const pair<const idx_t, unique_ptr<TableFilter>> &entry) {
-			       return TableFilterHasDynamicFilter(*entry.second);
-		       });
+		       std::any_of(object_filters.begin(), object_filters.end(),
+		                   [](const pair<const idx_t, unique_ptr<TableFilter>> &entry) {
+			                   return TableFilterHasDynamicFilter(*entry.second);
+		                   });
 	}
 
 	bool HasAnyFilter() const {
@@ -99,7 +100,8 @@ struct LustreLinkObjectsFilter {
 		} else if (has_link_fids) {
 			lookup_fids.insert(lookup_fids.end(), link_filter->fid_values.begin(), link_filter->fid_values.end());
 		} else if (has_object_fids) {
-			lookup_fids.insert(lookup_fids.end(), object_fid_filter->fid_values.begin(), object_fid_filter->fid_values.end());
+			lookup_fids.insert(lookup_fids.end(), object_fid_filter->fid_values.begin(),
+			                   object_fid_filter->fid_values.end());
 		}
 		std::sort(lookup_fids.begin(), lookup_fids.end());
 		lookup_fids.erase(std::unique(lookup_fids.begin(), lookup_fids.end()), lookup_fids.end());
@@ -298,8 +300,7 @@ const vector<LogicalType> &LustreLinkObjectsFunction::GetColumnTypes() {
 }
 
 static unique_ptr<FunctionData> LustreLinkObjectsBindSingle(ClientContext &context, TableFunctionBindInput &input,
-                                                            vector<LogicalType> &return_types,
-                                                            vector<string> &names) {
+                                                            vector<LogicalType> &return_types, vector<string> &names) {
 	auto result = make_uniq<LustreQueryBindData>();
 	result->device_paths.push_back(StringValue::Get(input.inputs[0]));
 	ParseNamedParameters(input.named_parameters, result->scan_config);
@@ -310,8 +311,7 @@ static unique_ptr<FunctionData> LustreLinkObjectsBindSingle(ClientContext &conte
 }
 
 static unique_ptr<FunctionData> LustreLinkObjectsBindMulti(ClientContext &context, TableFunctionBindInput &input,
-                                                           vector<LogicalType> &return_types,
-                                                           vector<string> &names) {
+                                                           vector<LogicalType> &return_types, vector<string> &names) {
 	auto result = make_uniq<LustreQueryBindData>();
 	auto &list_values = ListValue::GetChildren(input.inputs[0]);
 	for (auto &val : list_values) {
@@ -463,8 +463,7 @@ static void ResetLinkObjectsBlockGroupState(LustreLinkObjectsLocalState &lstate)
 	lstate.block_group_batch_end = 0;
 }
 
-static bool ClaimNextLinkObjectsBlockGroup(LustreLinkObjectsGlobalState &gstate,
-                                           LustreLinkObjectsLocalState &lstate) {
+static bool ClaimNextLinkObjectsBlockGroup(LustreLinkObjectsGlobalState &gstate, LustreLinkObjectsLocalState &lstate) {
 	static constexpr int BLOCK_GROUP_BATCH_SIZE = 8;
 
 	if (lstate.block_group_active) {
@@ -710,9 +709,8 @@ static void LustreLinkObjectsExecute(ClientContext &context, TableFunctionInput 
 			lock_guard<mutex> lock(gstate.device_transition_lock);
 			idx_t current_dev = gstate.current_device_idx.load();
 			if (lstate.initialized_device_idx == current_dev &&
-			    (!gstate.use_sequential_scan ||
-			     (gstate.next_block_group.load() >= gstate.total_block_groups &&
-			      gstate.active_block_groups.load() == 0))) {
+			    (!gstate.use_sequential_scan || (gstate.next_block_group.load() >= gstate.total_block_groups &&
+			                                     gstate.active_block_groups.load() == 0))) {
 				gstate.device_initialized.store(false);
 				gstate.current_device_idx++;
 				gstate.next_fid_idx.store(0);
@@ -746,11 +744,10 @@ static unique_ptr<NodeStatistics> LustreLinkObjectsCardinality(ClientContext &co
 }
 
 TableFunction LustreLinkObjectsFunction::GetFunction(bool multi_device) {
-	TableFunction func("lustre_link_objects_internal",
-	                   {multi_device ? LogicalType::LIST(LogicalType::VARCHAR) : LogicalType::VARCHAR},
-	                   LustreLinkObjectsExecute,
-	                   multi_device ? LustreLinkObjectsBindMulti : LustreLinkObjectsBindSingle,
-	                   LustreLinkObjectsInitGlobal, LustreLinkObjectsInitLocal);
+	TableFunction func(
+	    "lustre_link_objects_internal", {multi_device ? LogicalType::LIST(LogicalType::VARCHAR) : LogicalType::VARCHAR},
+	    LustreLinkObjectsExecute, multi_device ? LustreLinkObjectsBindMulti : LustreLinkObjectsBindSingle,
+	    LustreLinkObjectsInitGlobal, LustreLinkObjectsInitLocal);
 	func.named_parameters["skip_no_fid"] = LogicalType::BOOLEAN;
 	func.named_parameters["skip_no_linkea"] = LogicalType::BOOLEAN;
 	func.projection_pushdown = true;

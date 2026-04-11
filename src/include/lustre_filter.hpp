@@ -68,9 +68,9 @@ struct LustreFilterCondition {
 	uint64_t uint_value = 0;
 	int64_t int_value = 0;
 	string string_value;
-	std::unordered_set<uint64_t> uint_set;    // For IN operator (unsigned columns)
-	std::unordered_set<int64_t> int_set;      // For IN operator (signed columns, e.g. timestamps)
-	std::unordered_set<string> string_set;    // For IN operator (string columns)
+	std::unordered_set<uint64_t> uint_set; // For IN operator (unsigned columns)
+	std::unordered_set<int64_t> int_set;   // For IN operator (signed columns, e.g. timestamps)
+	std::unordered_set<string> string_set; // For IN operator (string columns)
 
 	//! Evaluate this condition against an inode
 	bool Evaluate(const LustreInode &inode) const;

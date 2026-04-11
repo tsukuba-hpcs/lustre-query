@@ -29,53 +29,36 @@ static constexpr idx_t LAYOUT_SEQ_SCAN_THRESHOLD = 8192;
 //===----------------------------------------------------------------------===//
 
 static const vector<string> LAYOUT_COLUMN_NAMES = {
-    "fid",
-    "comp_index",
-    "comp_id",
-    "mirror_id",
-    "comp_flags",
-    "extent_start",
-    "extent_end",
-    "pattern",
-    "stripe_size",
-    "stripe_count",
-    "stripe_offset",
-    "pool",
-    "dstripe_count",
-    "cstripe_count",
-    "compr_type",
-    "compr_lvl",
-    "device"
-};
+    "fid",           "comp_index",    "comp_id",     "mirror_id",    "comp_flags",    "extent_start",
+    "extent_end",    "pattern",       "stripe_size", "stripe_count", "stripe_offset", "pool",
+    "dstripe_count", "cstripe_count", "compr_type",  "compr_lvl",    "device"};
 
 static const vector<LogicalType> LAYOUT_COLUMN_TYPES = {
-    LogicalType::VARCHAR,    // fid
-    LogicalType::UINTEGER,   // comp_index
-    LogicalType::UINTEGER,   // comp_id
-    LogicalType::USMALLINT,  // mirror_id
-    LogicalType::UINTEGER,   // comp_flags
-    LogicalType::UBIGINT,    // extent_start
-    LogicalType::UBIGINT,    // extent_end
-    LogicalType::UINTEGER,   // pattern
-    LogicalType::UINTEGER,   // stripe_size
-    LogicalType::USMALLINT,  // stripe_count
-    LogicalType::USMALLINT,  // stripe_offset
-    LogicalType::VARCHAR,    // pool
-    LogicalType::UTINYINT,   // dstripe_count
-    LogicalType::UTINYINT,   // cstripe_count
-    LogicalType::UTINYINT,   // compr_type
-    LogicalType::UTINYINT,   // compr_lvl
-    LogicalType::VARCHAR     // device
+    LogicalType::VARCHAR,   // fid
+    LogicalType::UINTEGER,  // comp_index
+    LogicalType::UINTEGER,  // comp_id
+    LogicalType::USMALLINT, // mirror_id
+    LogicalType::UINTEGER,  // comp_flags
+    LogicalType::UBIGINT,   // extent_start
+    LogicalType::UBIGINT,   // extent_end
+    LogicalType::UINTEGER,  // pattern
+    LogicalType::UINTEGER,  // stripe_size
+    LogicalType::USMALLINT, // stripe_count
+    LogicalType::USMALLINT, // stripe_offset
+    LogicalType::VARCHAR,   // pool
+    LogicalType::UTINYINT,  // dstripe_count
+    LogicalType::UTINYINT,  // cstripe_count
+    LogicalType::UTINYINT,  // compr_type
+    LogicalType::UTINYINT,  // compr_lvl
+    LogicalType::VARCHAR    // device
 };
 
 //===----------------------------------------------------------------------===//
 // Bind Functions
 //===----------------------------------------------------------------------===//
 
-static unique_ptr<FunctionData> LustreLayoutsBindSingle(ClientContext &context,
-                                                        TableFunctionBindInput &input,
-                                                        vector<LogicalType> &return_types,
-                                                        vector<string> &names) {
+static unique_ptr<FunctionData> LustreLayoutsBindSingle(ClientContext &context, TableFunctionBindInput &input,
+                                                        vector<LogicalType> &return_types, vector<string> &names) {
 	auto result = make_uniq<LustreQueryBindData>();
 	result->device_paths.push_back(StringValue::Get(input.inputs[0]));
 	ParseNamedParameters(input.named_parameters, result->scan_config);
@@ -84,10 +67,8 @@ static unique_ptr<FunctionData> LustreLayoutsBindSingle(ClientContext &context,
 	return std::move(result);
 }
 
-static unique_ptr<FunctionData> LustreLayoutsBindMulti(ClientContext &context,
-                                                       TableFunctionBindInput &input,
-                                                       vector<LogicalType> &return_types,
-                                                       vector<string> &names) {
+static unique_ptr<FunctionData> LustreLayoutsBindMulti(ClientContext &context, TableFunctionBindInput &input,
+                                                       vector<LogicalType> &return_types, vector<string> &names) {
 	auto result = make_uniq<LustreQueryBindData>();
 	auto &list_values = ListValue::GetChildren(input.inputs[0]);
 	for (auto &val : list_values) {
@@ -107,7 +88,7 @@ static unique_ptr<FunctionData> LustreLayoutsBindMulti(ClientContext &context,
 //===----------------------------------------------------------------------===//
 
 static unique_ptr<GlobalTableFunctionState> LustreLayoutsInitGlobal(ClientContext &context,
-                                                                     TableFunctionInitInput &input) {
+                                                                    TableFunctionInitInput &input) {
 	auto &bind_data = input.bind_data->Cast<LustreQueryBindData>();
 
 	auto gstate = make_uniq<LustreLayoutsGlobalState>();
@@ -124,12 +105,11 @@ static unique_ptr<GlobalTableFunctionState> LustreLayoutsInitGlobal(ClientContex
 	// Set thread count from scheduler
 	gstate->thread_count = NumericCast<idx_t>(TaskScheduler::GetScheduler(context).NumberOfThreads());
 
-	gstate->fid_filter = FIDOnlyFilter::Create(input.filters.get(), input.column_ids,
-	                                           static_cast<idx_t>(LayoutColumnIdx::FID));
-	gstate->use_sequential_scan = gstate->fid_filter &&
-		(gstate->fid_filter->RequiresGenericEvaluation() ||
-		 !gstate->fid_filter->HasFIDFilter() ||
-		 gstate->fid_filter->fid_values.size() > LAYOUT_SEQ_SCAN_THRESHOLD);
+	gstate->fid_filter =
+	    FIDOnlyFilter::Create(input.filters.get(), input.column_ids, static_cast<idx_t>(LayoutColumnIdx::FID));
+	gstate->use_sequential_scan =
+	    gstate->fid_filter && (gstate->fid_filter->RequiresGenericEvaluation() || !gstate->fid_filter->HasFIDFilter() ||
+	                           gstate->fid_filter->fid_values.size() > LAYOUT_SEQ_SCAN_THRESHOLD);
 	if (gstate->use_sequential_scan && !gstate->device_paths.empty()) {
 		MDTScanner probe;
 		probe.Open(gstate->device_paths[0]);
@@ -144,8 +124,8 @@ static unique_ptr<GlobalTableFunctionState> LustreLayoutsInitGlobal(ClientContex
 }
 
 static unique_ptr<LocalTableFunctionState> LustreLayoutsInitLocal(ExecutionContext &context,
-                                                                   TableFunctionInitInput &input,
-                                                                   GlobalTableFunctionState *global_state) {
+                                                                  TableFunctionInitInput &input,
+                                                                  GlobalTableFunctionState *global_state) {
 	return make_uniq<LustreLayoutsLocalState>();
 }
 
@@ -153,9 +133,8 @@ static unique_ptr<LocalTableFunctionState> LustreLayoutsInitLocal(ExecutionConte
 // Helper: Write a layout output row
 //===----------------------------------------------------------------------===//
 
-static void WriteLayoutRow(DataChunk &output, idx_t row_idx, const vector<idx_t> &column_ids,
-                           const LustreFID &fid, const LustreLayoutComponent &comp,
-                           const string &device_path) {
+static void WriteLayoutRow(DataChunk &output, idx_t row_idx, const vector<idx_t> &column_ids, const LustreFID &fid,
+                           const LustreLayoutComponent &comp, const string &device_path) {
 	for (idx_t i = 0; i < column_ids.size(); i++) {
 		auto &vec = output.data[i];
 		switch (column_ids[i]) {
@@ -346,8 +325,8 @@ static bool MatchesLayoutFIDPredicate(const FIDOnlyFilter &filter, const LustreF
 // FID Path: batched lookup by fid → OI → inode → LOV → component rows
 //===----------------------------------------------------------------------===//
 
-static bool ExecuteExactFIDPath(LustreLayoutsGlobalState &gstate, LustreLayoutsLocalState &lstate,
-                                DataChunk &output, idx_t &output_count) {
+static bool ExecuteExactFIDPath(LustreLayoutsGlobalState &gstate, LustreLayoutsLocalState &lstate, DataChunk &output,
+                                idx_t &output_count) {
 	auto &filter = *gstate.fid_filter;
 	const auto &current_device = lstate.initialized_device_path;
 	struct LookupEntry {
@@ -357,11 +336,9 @@ static bool ExecuteExactFIDPath(LustreLayoutsGlobalState &gstate, LustreLayoutsL
 
 	while (output_count < STANDARD_VECTOR_SIZE) {
 		// Drain pending results first
-		while (lstate.pending_results_idx < lstate.pending_results.size() &&
-		       output_count < STANDARD_VECTOR_SIZE) {
+		while (lstate.pending_results_idx < lstate.pending_results.size() && output_count < STANDARD_VECTOR_SIZE) {
 			auto &row = lstate.pending_results[lstate.pending_results_idx];
-			WriteLayoutRow(output, output_count, gstate.column_ids,
-			               row.fid, row.component, current_device);
+			WriteLayoutRow(output, output_count, gstate.column_ids, row.fid, row.component, current_device);
 			lstate.pending_results_idx++;
 			output_count++;
 		}
@@ -432,14 +409,13 @@ static bool ExecuteExactFIDPath(LustreLayoutsGlobalState &gstate, LustreLayoutsL
 // Sequential Scan Path - linear scan by block group
 //===----------------------------------------------------------------------===//
 
-static bool ExecuteSequentialPath(LustreLayoutsGlobalState &gstate, LustreLayoutsLocalState &lstate,
-                                  DataChunk &output, idx_t &output_count) {
+static bool ExecuteSequentialPath(LustreLayoutsGlobalState &gstate, LustreLayoutsLocalState &lstate, DataChunk &output,
+                                  idx_t &output_count) {
 	auto &filter = *gstate.fid_filter;
 	const auto &current_device = lstate.initialized_device_path;
 
 	while (output_count < STANDARD_VECTOR_SIZE) {
-		while (lstate.pending_results_idx < lstate.pending_results.size() &&
-		       output_count < STANDARD_VECTOR_SIZE) {
+		while (lstate.pending_results_idx < lstate.pending_results.size() && output_count < STANDARD_VECTOR_SIZE) {
 			auto &row = lstate.pending_results[lstate.pending_results_idx];
 			WriteLayoutRow(output, output_count, gstate.column_ids, row.fid, row.component, current_device);
 			lstate.pending_results_idx++;
@@ -485,17 +461,16 @@ static bool ExecuteSequentialPath(LustreLayoutsGlobalState &gstate, LustreLayout
 // Execute Function
 //===----------------------------------------------------------------------===//
 
-static void LustreLayoutsExecute(ClientContext &context, TableFunctionInput &data_p,
-                                  DataChunk &output) {
+static void LustreLayoutsExecute(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
 	auto &gstate = data_p.global_state->Cast<LustreLayoutsGlobalState>();
 	auto &lstate = data_p.local_state->Cast<LustreLayoutsLocalState>();
 
 	if (gstate.fid_filter->HasDynamicFilter()) {
 		bool changed = gstate.fid_filter->ResolveDynamicFilters();
 		if (changed) {
-			gstate.use_sequential_scan =
-			    gstate.fid_filter->RequiresGenericEvaluation() || !gstate.fid_filter->HasFIDFilter() ||
-			    gstate.fid_filter->fid_values.size() > LAYOUT_SEQ_SCAN_THRESHOLD;
+			gstate.use_sequential_scan = gstate.fid_filter->RequiresGenericEvaluation() ||
+			                             !gstate.fid_filter->HasFIDFilter() ||
+			                             gstate.fid_filter->fid_values.size() > LAYOUT_SEQ_SCAN_THRESHOLD;
 			gstate.finished = false;
 			gstate.next_fid_idx.store(0);
 			gstate.next_block_group.store(0);
@@ -522,9 +497,8 @@ static void LustreLayoutsExecute(ClientContext &context, TableFunctionInput &dat
 			break;
 		}
 
-		bool has_more = gstate.use_sequential_scan
-		    ? ExecuteSequentialPath(gstate, lstate, output, output_count)
-		    : ExecuteExactFIDPath(gstate, lstate, output, output_count);
+		bool has_more = gstate.use_sequential_scan ? ExecuteSequentialPath(gstate, lstate, output, output_count)
+		                                           : ExecuteExactFIDPath(gstate, lstate, output, output_count);
 
 		if (!has_more) {
 			if (gstate.use_sequential_scan && gstate.active_block_groups.load() != 0) {
@@ -533,9 +507,8 @@ static void LustreLayoutsExecute(ClientContext &context, TableFunctionInput &dat
 			lock_guard<mutex> lock(gstate.device_transition_lock);
 			idx_t current_dev = gstate.current_device_idx.load();
 			if (lstate.initialized_device_idx == current_dev &&
-			    (!gstate.use_sequential_scan ||
-			     (gstate.next_block_group.load() >= gstate.total_block_groups &&
-			      gstate.active_block_groups.load() == 0))) {
+			    (!gstate.use_sequential_scan || (gstate.next_block_group.load() >= gstate.total_block_groups &&
+			                                     gstate.active_block_groups.load() == 0))) {
 				gstate.device_initialized.store(false);
 				gstate.current_device_idx++;
 				gstate.next_fid_idx.store(0);
@@ -559,8 +532,7 @@ static void LustreLayoutsExecute(ClientContext &context, TableFunctionInput &dat
 // Cardinality Function
 //===----------------------------------------------------------------------===//
 
-static unique_ptr<NodeStatistics> LustreLayoutsCardinality(ClientContext &context,
-                                                            const FunctionData *bind_data_p) {
+static unique_ptr<NodeStatistics> LustreLayoutsCardinality(ClientContext &context, const FunctionData *bind_data_p) {
 	return make_uniq<NodeStatistics>(1000000000000);
 }
 
@@ -579,8 +551,8 @@ static void SetLayoutCommonProperties(TableFunction &func) {
 TableFunctionSet LustreLayoutsFunction::GetFunctionSet() {
 	TableFunctionSet set("lustre_layouts");
 
-	TableFunction single_func("lustre_layouts", {LogicalType::VARCHAR}, LustreLayoutsExecute,
-	                          LustreLayoutsBindSingle, LustreLayoutsInitGlobal, LustreLayoutsInitLocal);
+	TableFunction single_func("lustre_layouts", {LogicalType::VARCHAR}, LustreLayoutsExecute, LustreLayoutsBindSingle,
+	                          LustreLayoutsInitGlobal, LustreLayoutsInitLocal);
 	SetLayoutCommonProperties(single_func);
 	set.AddFunction(std::move(single_func));
 

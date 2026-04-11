@@ -29,8 +29,7 @@ unique_ptr<FunctionData> LustreQueryBindData::Copy() const {
 
 bool LustreQueryBindData::Equals(const FunctionData &other_p) const {
 	auto &other = other_p.Cast<LustreQueryBindData>();
-	return device_paths == other.device_paths &&
-	       scan_config.skip_no_fid == other.scan_config.skip_no_fid &&
+	return device_paths == other.device_paths && scan_config.skip_no_fid == other.scan_config.skip_no_fid &&
 	       scan_config.skip_no_linkea == other.scan_config.skip_no_linkea &&
 	       scan_config.read_link_names == other.scan_config.read_link_names &&
 	       inode_link_join_on_parent_fid == other.inode_link_join_on_parent_fid;
@@ -42,18 +41,9 @@ bool LustreQueryBindData::Equals(const FunctionData &other_p) const {
 
 LustreQueryGlobalState::LustreQueryGlobalState(const vector<string> &paths, const vector<idx_t> &cols,
                                                const MDTScanConfig &config)
-    : current_device_idx(0),
-      total_scanned(0),
-      current_device_scanned(0),
-      total_returned(0),
-      finished(false),
-      device_paths(paths),
-      device_initialized(false),
-      column_ids(cols),
-      scan_config(config),
-      next_fid_idx(0),
-      next_block_group(0),
-      active_block_groups(0) {
+    : current_device_idx(0), total_scanned(0), current_device_scanned(0), total_returned(0), finished(false),
+      device_paths(paths), device_initialized(false), column_ids(cols), scan_config(config), next_fid_idx(0),
+      next_block_group(0), active_block_groups(0) {
 }
 
 LustreQueryGlobalState::~LustreQueryGlobalState() {
@@ -152,10 +142,10 @@ double LustreScanProgress(ClientContext &context, const FunctionData *bind_data_
 	}
 
 	// Account for multiple devices
-	double device_progress = static_cast<double>(global_state.current_device_idx.load()) /
-	                          global_state.device_paths.size();
-	double current_device_progress = static_cast<double>(global_state.next_block_group.load()) /
-	                                  global_state.total_block_groups;
+	double device_progress =
+	    static_cast<double>(global_state.current_device_idx.load()) / global_state.device_paths.size();
+	double current_device_progress =
+	    static_cast<double>(global_state.next_block_group.load()) / global_state.total_block_groups;
 	double per_device = 1.0 / global_state.device_paths.size();
 
 	return device_progress + (current_device_progress * per_device);

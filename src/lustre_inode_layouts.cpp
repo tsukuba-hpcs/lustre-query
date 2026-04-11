@@ -32,20 +32,21 @@ static constexpr idx_t INODE_LAYOUT_EXACT_LOOKUP_BATCH_SIZE = 512;
 static constexpr idx_t INODE_LAYOUT_SEQ_SCAN_THRESHOLD = 8192;
 
 static const vector<string> INODE_LAYOUT_COLUMN_NAMES = {
-    "inode_fid", "ino", "type", "mode", "nlink", "uid", "gid", "size", "blocks", "atime", "mtime",
-    "ctime", "projid", "flags", "device", "layout_fid", "comp_index", "comp_id", "mirror_id", "comp_flags",
-    "extent_start", "extent_end", "pattern", "stripe_size", "stripe_count", "stripe_offset", "pool",
-    "dstripe_count", "cstripe_count", "compr_type", "compr_lvl", "layout_device"};
+    "inode_fid",     "ino",        "type",        "mode",         "nlink",         "uid",        "gid",
+    "size",          "blocks",     "atime",       "mtime",        "ctime",         "projid",     "flags",
+    "device",        "layout_fid", "comp_index",  "comp_id",      "mirror_id",     "comp_flags", "extent_start",
+    "extent_end",    "pattern",    "stripe_size", "stripe_count", "stripe_offset", "pool",       "dstripe_count",
+    "cstripe_count", "compr_type", "compr_lvl",   "layout_device"};
 
 static const vector<LogicalType> INODE_LAYOUT_COLUMN_TYPES = {
-    LogicalType::VARCHAR,   LogicalType::UBIGINT,   LogicalType::VARCHAR,    LogicalType::UINTEGER,
-    LogicalType::UINTEGER,  LogicalType::UINTEGER,  LogicalType::UINTEGER,   LogicalType::UBIGINT,
-    LogicalType::UBIGINT,   LogicalType::TIMESTAMP, LogicalType::TIMESTAMP,  LogicalType::TIMESTAMP,
-    LogicalType::UINTEGER,  LogicalType::UINTEGER,  LogicalType::VARCHAR,    LogicalType::VARCHAR,
-    LogicalType::UINTEGER,  LogicalType::UINTEGER,  LogicalType::USMALLINT,  LogicalType::UINTEGER,
-    LogicalType::UBIGINT,   LogicalType::UBIGINT,   LogicalType::UINTEGER,   LogicalType::UINTEGER,
-    LogicalType::USMALLINT, LogicalType::USMALLINT, LogicalType::VARCHAR,    LogicalType::UTINYINT,
-    LogicalType::UTINYINT,  LogicalType::UTINYINT,  LogicalType::UTINYINT,   LogicalType::VARCHAR};
+    LogicalType::VARCHAR,   LogicalType::UBIGINT,   LogicalType::VARCHAR,   LogicalType::UINTEGER,
+    LogicalType::UINTEGER,  LogicalType::UINTEGER,  LogicalType::UINTEGER,  LogicalType::UBIGINT,
+    LogicalType::UBIGINT,   LogicalType::TIMESTAMP, LogicalType::TIMESTAMP, LogicalType::TIMESTAMP,
+    LogicalType::UINTEGER,  LogicalType::UINTEGER,  LogicalType::VARCHAR,   LogicalType::VARCHAR,
+    LogicalType::UINTEGER,  LogicalType::UINTEGER,  LogicalType::USMALLINT, LogicalType::UINTEGER,
+    LogicalType::UBIGINT,   LogicalType::UBIGINT,   LogicalType::UINTEGER,  LogicalType::UINTEGER,
+    LogicalType::USMALLINT, LogicalType::USMALLINT, LogicalType::VARCHAR,   LogicalType::UTINYINT,
+    LogicalType::UTINYINT,  LogicalType::UTINYINT,  LogicalType::UTINYINT,  LogicalType::VARCHAR};
 
 struct LustreInodeLayoutsFilter {
 	unique_ptr<LustreFilterSet> inode_filters;
@@ -104,9 +105,11 @@ struct LustreInodeLayoutsFilter {
 			                      layout_fid_filter->fid_values.begin(), layout_fid_filter->fid_values.end(),
 			                      std::back_inserter(lookup_fids));
 		} else if (has_inode_fids) {
-			lookup_fids.insert(lookup_fids.end(), inode_fid_filter->fid_values.begin(), inode_fid_filter->fid_values.end());
+			lookup_fids.insert(lookup_fids.end(), inode_fid_filter->fid_values.begin(),
+			                   inode_fid_filter->fid_values.end());
 		} else if (has_layout_fids) {
-			lookup_fids.insert(lookup_fids.end(), layout_fid_filter->fid_values.begin(), layout_fid_filter->fid_values.end());
+			lookup_fids.insert(lookup_fids.end(), layout_fid_filter->fid_values.begin(),
+			                   layout_fid_filter->fid_values.end());
 		}
 		std::sort(lookup_fids.begin(), lookup_fids.end());
 		lookup_fids.erase(std::unique(lookup_fids.begin(), lookup_fids.end()), lookup_fids.end());
@@ -232,8 +235,9 @@ struct LustreInodeLayoutsGlobalState : public GlobalTableFunctionState {
 	bool use_sequential_scan = true;
 	idx_t thread_count = 1;
 
-	LustreInodeLayoutsGlobalState() : current_device_idx(0), finished(false), device_initialized(false), next_fid_idx(0),
-	                                  next_block_group(0), active_block_groups(0) {
+	LustreInodeLayoutsGlobalState()
+	    : current_device_idx(0), finished(false), device_initialized(false), next_fid_idx(0), next_block_group(0),
+	      active_block_groups(0) {
 	}
 
 	idx_t MaxThreads() const override {
@@ -705,9 +709,8 @@ static void LustreInodeLayoutsExecute(ClientContext &context, TableFunctionInput
 			lock_guard<mutex> lock(gstate.device_transition_lock);
 			idx_t current_dev = gstate.current_device_idx.load();
 			if (lstate.initialized_device_idx == current_dev &&
-			    (!gstate.use_sequential_scan ||
-			     (gstate.next_block_group.load() >= gstate.total_block_groups &&
-			      gstate.active_block_groups.load() == 0))) {
+			    (!gstate.use_sequential_scan || (gstate.next_block_group.load() >= gstate.total_block_groups &&
+			                                     gstate.active_block_groups.load() == 0))) {
 				gstate.device_initialized.store(false);
 				gstate.current_device_idx++;
 				gstate.next_fid_idx.store(0);

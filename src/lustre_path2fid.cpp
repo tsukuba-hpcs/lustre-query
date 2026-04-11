@@ -109,8 +109,7 @@ static unique_ptr<FunctionData> Path2FidBindMulti(ClientContext &context, Scalar
 // Local State Init
 //===----------------------------------------------------------------------===//
 
-static unique_ptr<FunctionLocalState> Path2FidInitLocal(ExpressionState &state,
-                                                        const BoundFunctionExpression &expr,
+static unique_ptr<FunctionLocalState> Path2FidInitLocal(ExpressionState &state, const BoundFunctionExpression &expr,
                                                         FunctionData *bind_data) {
 	return make_uniq<Path2FidLocalState>();
 }
@@ -222,16 +221,14 @@ ScalarFunctionSet LustrePath2FidFunction::GetFunctionSet() {
 	ScalarFunctionSet set("lustre_path2fid");
 
 	// Overload 1: lustre_path2fid(path VARCHAR, device VARCHAR) -> VARCHAR
-	ScalarFunction single_func({LogicalType::VARCHAR, LogicalType::VARCHAR}, LogicalType::VARCHAR,
-	                           Path2FidExecute, Path2FidBindSingle, nullptr, nullptr,
-	                           Path2FidInitLocal);
+	ScalarFunction single_func({LogicalType::VARCHAR, LogicalType::VARCHAR}, LogicalType::VARCHAR, Path2FidExecute,
+	                           Path2FidBindSingle, nullptr, nullptr, Path2FidInitLocal);
 	single_func.null_handling = FunctionNullHandling::SPECIAL_HANDLING;
 	set.AddFunction(std::move(single_func));
 
 	// Overload 2: lustre_path2fid(path VARCHAR, devices LIST(VARCHAR)) -> VARCHAR
 	ScalarFunction multi_func({LogicalType::VARCHAR, LogicalType::LIST(LogicalType::VARCHAR)}, LogicalType::VARCHAR,
-	                          Path2FidExecute, Path2FidBindMulti, nullptr, nullptr,
-	                          Path2FidInitLocal);
+	                          Path2FidExecute, Path2FidBindMulti, nullptr, nullptr, Path2FidInitLocal);
 	multi_func.null_handling = FunctionNullHandling::SPECIAL_HANDLING;
 	set.AddFunction(std::move(multi_func));
 

@@ -30,42 +30,30 @@ static constexpr idx_t DIRMAP_SEQ_SCAN_THRESHOLD = 8192;
 // Column Definitions
 //===----------------------------------------------------------------------===//
 
-static const vector<string> DIRMAP_COLUMN_NAMES = {
-    "dir_fid",
-    "parent_fid",
-    "dir_device",
-    "parent_device",
-    "master_mdt_index",
-    "stripe_index",
-    "stripe_count",
-    "hash_type",
-    "layout_version",
-    "source",
-    "lma_incompat"
-};
+static const vector<string> DIRMAP_COLUMN_NAMES = {"dir_fid",          "parent_fid",   "dir_device",   "parent_device",
+                                                   "master_mdt_index", "stripe_index", "stripe_count", "hash_type",
+                                                   "layout_version",   "source",       "lma_incompat"};
 
 static const vector<LogicalType> DIRMAP_COLUMN_TYPES = {
-    LogicalType::VARCHAR,    // dir_fid
-    LogicalType::VARCHAR,    // parent_fid
-    LogicalType::VARCHAR,    // dir_device
-    LogicalType::VARCHAR,    // parent_device
-    LogicalType::UINTEGER,   // master_mdt_index
-    LogicalType::UINTEGER,   // stripe_index
-    LogicalType::UINTEGER,   // stripe_count
-    LogicalType::UINTEGER,   // hash_type
-    LogicalType::UINTEGER,   // layout_version
-    LogicalType::VARCHAR,    // source
-    LogicalType::UINTEGER    // lma_incompat
+    LogicalType::VARCHAR,  // dir_fid
+    LogicalType::VARCHAR,  // parent_fid
+    LogicalType::VARCHAR,  // dir_device
+    LogicalType::VARCHAR,  // parent_device
+    LogicalType::UINTEGER, // master_mdt_index
+    LogicalType::UINTEGER, // stripe_index
+    LogicalType::UINTEGER, // stripe_count
+    LogicalType::UINTEGER, // hash_type
+    LogicalType::UINTEGER, // layout_version
+    LogicalType::VARCHAR,  // source
+    LogicalType::UINTEGER  // lma_incompat
 };
 
 //===----------------------------------------------------------------------===//
 // Bind Functions
 //===----------------------------------------------------------------------===//
 
-static unique_ptr<FunctionData> LustreDirMapBindSingle(ClientContext &context,
-                                                       TableFunctionBindInput &input,
-                                                       vector<LogicalType> &return_types,
-                                                       vector<string> &names) {
+static unique_ptr<FunctionData> LustreDirMapBindSingle(ClientContext &context, TableFunctionBindInput &input,
+                                                       vector<LogicalType> &return_types, vector<string> &names) {
 	auto result = make_uniq<LustreQueryBindData>();
 	result->device_paths.push_back(StringValue::Get(input.inputs[0]));
 	ParseNamedParameters(input.named_parameters, result->scan_config);
@@ -75,10 +63,8 @@ static unique_ptr<FunctionData> LustreDirMapBindSingle(ClientContext &context,
 	return std::move(result);
 }
 
-static unique_ptr<FunctionData> LustreDirMapBindMulti(ClientContext &context,
-                                                      TableFunctionBindInput &input,
-                                                      vector<LogicalType> &return_types,
-                                                      vector<string> &names) {
+static unique_ptr<FunctionData> LustreDirMapBindMulti(ClientContext &context, TableFunctionBindInput &input,
+                                                      vector<LogicalType> &return_types, vector<string> &names) {
 	auto result = make_uniq<LustreQueryBindData>();
 	auto &list_values = ListValue::GetChildren(input.inputs[0]);
 	for (auto &val : list_values) {
@@ -99,7 +85,7 @@ static unique_ptr<FunctionData> LustreDirMapBindMulti(ClientContext &context,
 //===----------------------------------------------------------------------===//
 
 static unique_ptr<GlobalTableFunctionState> LustreDirMapInitGlobal(ClientContext &context,
-                                                                    TableFunctionInitInput &input) {
+                                                                   TableFunctionInitInput &input) {
 	auto &bind_data = input.bind_data->Cast<LustreQueryBindData>();
 
 	auto gstate = make_uniq<LustreDirMapGlobalState>();
@@ -115,12 +101,11 @@ static unique_ptr<GlobalTableFunctionState> LustreDirMapInitGlobal(ClientContext
 
 	gstate->thread_count = NumericCast<idx_t>(TaskScheduler::GetScheduler(context).NumberOfThreads());
 
-	gstate->fid_filter = FIDOnlyFilter::Create(input.filters.get(), input.column_ids,
-	                                           static_cast<idx_t>(DirMapColumnIdx::DIR_FID));
-	gstate->use_sequential_scan = gstate->fid_filter &&
-		(gstate->fid_filter->RequiresGenericEvaluation() ||
-		 !gstate->fid_filter->HasFIDFilter() ||
-		 gstate->fid_filter->fid_values.size() > DIRMAP_SEQ_SCAN_THRESHOLD);
+	gstate->fid_filter =
+	    FIDOnlyFilter::Create(input.filters.get(), input.column_ids, static_cast<idx_t>(DirMapColumnIdx::DIR_FID));
+	gstate->use_sequential_scan =
+	    gstate->fid_filter && (gstate->fid_filter->RequiresGenericEvaluation() || !gstate->fid_filter->HasFIDFilter() ||
+	                           gstate->fid_filter->fid_values.size() > DIRMAP_SEQ_SCAN_THRESHOLD);
 	if (gstate->use_sequential_scan && !gstate->device_paths.empty()) {
 		MDTScanner probe;
 		probe.Open(gstate->device_paths[0]);
@@ -135,8 +120,8 @@ static unique_ptr<GlobalTableFunctionState> LustreDirMapInitGlobal(ClientContext
 }
 
 static unique_ptr<LocalTableFunctionState> LustreDirMapInitLocal(ExecutionContext &context,
-                                                                  TableFunctionInitInput &input,
-                                                                  GlobalTableFunctionState *global_state) {
+                                                                 TableFunctionInitInput &input,
+                                                                 GlobalTableFunctionState *global_state) {
 	return make_uniq<LustreDirMapLocalState>();
 }
 
@@ -194,13 +179,10 @@ static void WriteDirMapRow(DataChunk &output, idx_t row_idx, const vector<idx_t>
 // Core: Generate dirmap rows from a directory inode's metadata
 //===----------------------------------------------------------------------===//
 
-static void GenerateDirMapRows(const LustreFID &fid, const LustreLMV &lmv,
-                                const std::vector<LinkEntry> &links,
-                                const std::vector<DirEntry> &dir_entries,
-                                const std::string &device_path,
-                                uint32_t lma_incompat,
-                                LustreDirMapLocalState &lstate,
-                                std::vector<LustreDirMapGlobalState::PendingRow> &pending) {
+static void GenerateDirMapRows(const LustreFID &fid, const LustreLMV &lmv, const std::vector<LinkEntry> &links,
+                               const std::vector<DirEntry> &dir_entries, const std::string &device_path,
+                               uint32_t lma_incompat, LustreDirMapLocalState &lstate,
+                               std::vector<LustreDirMapGlobalState::PendingRow> &pending) {
 	pending.clear();
 
 	if (!lmv.IsValid()) {
@@ -311,7 +293,7 @@ static void GenerateDirMapRows(const LustreFID &fid, const LustreLMV &lmv,
 		row.dir_device.clear();
 		row.parent_device = device_path;
 		row.master_mdt_index = 0;
-		row.stripe_index = lmv.lmv_master_mdt_index;  // Reused as stripe index for slaves
+		row.stripe_index = lmv.lmv_master_mdt_index; // Reused as stripe index for slaves
 		row.stripe_count = lmv.lmv_stripe_count;
 		row.hash_type = lmv.lmv_hash_type;
 		row.layout_version = lmv.lmv_layout_version;
@@ -450,8 +432,8 @@ static bool MatchesDirMapFIDPredicate(const FIDOnlyFilter &filter, const LustreF
 // FID Path: batched lookup by dir_fid -> OI -> inode -> LMV -> dirmap rows
 //===----------------------------------------------------------------------===//
 
-static bool ExecuteExactFIDPath(LustreDirMapGlobalState &gstate, LustreDirMapLocalState &lstate,
-                                DataChunk &output, idx_t &output_count, LustreOutputStringCache &string_cache) {
+static bool ExecuteExactFIDPath(LustreDirMapGlobalState &gstate, LustreDirMapLocalState &lstate, DataChunk &output,
+                                idx_t &output_count, LustreOutputStringCache &string_cache) {
 	auto &filter = *gstate.fid_filter;
 	const auto &current_device = lstate.initialized_device_path;
 	struct LookupEntry {
@@ -461,8 +443,7 @@ static bool ExecuteExactFIDPath(LustreDirMapGlobalState &gstate, LustreDirMapLoc
 
 	while (output_count < STANDARD_VECTOR_SIZE) {
 		// Drain pending results first
-		while (lstate.pending_results_idx < lstate.pending_results.size() &&
-		       output_count < STANDARD_VECTOR_SIZE) {
+		while (lstate.pending_results_idx < lstate.pending_results.size() && output_count < STANDARD_VECTOR_SIZE) {
 			auto &row = lstate.pending_results[lstate.pending_results_idx];
 			WriteDirMapRow(output, output_count, gstate.column_ids, row, string_cache);
 			lstate.pending_results_idx++;
@@ -539,8 +520,8 @@ static bool ExecuteExactFIDPath(LustreDirMapGlobalState &gstate, LustreDirMapLoc
 
 			// lma_incompat not easily available from FID lookup path; set to 0
 			uint32_t lma_incompat = 0;
-			GenerateDirMapRows(inode.fid, lmv, links, dir_entries, current_device,
-			                   lma_incompat, lstate, lstate.pending_results);
+			GenerateDirMapRows(inode.fid, lmv, links, dir_entries, current_device, lma_incompat, lstate,
+			                   lstate.pending_results);
 		}
 	}
 
@@ -551,14 +532,13 @@ static bool ExecuteExactFIDPath(LustreDirMapGlobalState &gstate, LustreDirMapLoc
 // Sequential Scan Path - linear scan by block group
 //===----------------------------------------------------------------------===//
 
-static bool ExecuteSequentialPath(LustreDirMapGlobalState &gstate, LustreDirMapLocalState &lstate,
-                                  DataChunk &output, idx_t &output_count, LustreOutputStringCache &string_cache) {
+static bool ExecuteSequentialPath(LustreDirMapGlobalState &gstate, LustreDirMapLocalState &lstate, DataChunk &output,
+                                  idx_t &output_count, LustreOutputStringCache &string_cache) {
 	auto &filter = *gstate.fid_filter;
 	const auto &current_device = lstate.initialized_device_path;
 
 	while (output_count < STANDARD_VECTOR_SIZE) {
-		while (lstate.pending_results_idx < lstate.pending_results.size() &&
-		       output_count < STANDARD_VECTOR_SIZE) {
+		while (lstate.pending_results_idx < lstate.pending_results.size() && output_count < STANDARD_VECTOR_SIZE) {
 			auto &row = lstate.pending_results[lstate.pending_results_idx];
 			WriteDirMapRow(output, output_count, gstate.column_ids, row, string_cache);
 			lstate.pending_results_idx++;
@@ -581,8 +561,7 @@ static bool ExecuteSequentialPath(LustreDirMapGlobalState &gstate, LustreDirMapL
 			std::vector<DirEntry> dir_entries;
 			uint32_t lma_incompat = 0;
 
-			if (!lstate.scanner->GetNextDirMapEntries(ino, fid, lmv, links, dir_entries,
-			                                          lma_incompat,
+			if (!lstate.scanner->GetNextDirMapEntries(ino, fid, lmv, links, dir_entries, lma_incompat,
 			                                          gstate.scan_config, lstate.block_group_max_ino)) {
 				lstate.block_group_active = false;
 				gstate.active_block_groups.fetch_sub(1);
@@ -595,8 +574,8 @@ static bool ExecuteSequentialPath(LustreDirMapGlobalState &gstate, LustreDirMapL
 
 			lstate.pending_results.clear();
 			lstate.pending_results_idx = 0;
-			GenerateDirMapRows(fid, lmv, links, dir_entries, current_device,
-			                   lma_incompat, lstate, lstate.pending_results);
+			GenerateDirMapRows(fid, lmv, links, dir_entries, current_device, lma_incompat, lstate,
+			                   lstate.pending_results);
 			break;
 		}
 	}
@@ -608,17 +587,16 @@ static bool ExecuteSequentialPath(LustreDirMapGlobalState &gstate, LustreDirMapL
 // Execute Function
 //===----------------------------------------------------------------------===//
 
-static void LustreDirMapExecute(ClientContext &context, TableFunctionInput &data_p,
-                                DataChunk &output) {
+static void LustreDirMapExecute(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
 	auto &gstate = data_p.global_state->Cast<LustreDirMapGlobalState>();
 	auto &lstate = data_p.local_state->Cast<LustreDirMapLocalState>();
 
 	if (gstate.fid_filter->HasDynamicFilter()) {
 		bool changed = gstate.fid_filter->ResolveDynamicFilters();
 		if (changed) {
-			gstate.use_sequential_scan =
-			    gstate.fid_filter->RequiresGenericEvaluation() || !gstate.fid_filter->HasFIDFilter() ||
-			    gstate.fid_filter->fid_values.size() > DIRMAP_SEQ_SCAN_THRESHOLD;
+			gstate.use_sequential_scan = gstate.fid_filter->RequiresGenericEvaluation() ||
+			                             !gstate.fid_filter->HasFIDFilter() ||
+			                             gstate.fid_filter->fid_values.size() > DIRMAP_SEQ_SCAN_THRESHOLD;
 			gstate.finished = false;
 			gstate.next_fid_idx.store(0);
 			gstate.next_block_group.store(0);
@@ -647,8 +625,8 @@ static void LustreDirMapExecute(ClientContext &context, TableFunctionInput &data
 		}
 
 		bool has_more = gstate.use_sequential_scan
-		    ? ExecuteSequentialPath(gstate, lstate, output, output_count, string_cache)
-		    : ExecuteExactFIDPath(gstate, lstate, output, output_count, string_cache);
+		                    ? ExecuteSequentialPath(gstate, lstate, output, output_count, string_cache)
+		                    : ExecuteExactFIDPath(gstate, lstate, output, output_count, string_cache);
 
 		if (!has_more) {
 			if (gstate.use_sequential_scan && gstate.active_block_groups.load() != 0) {
@@ -657,9 +635,8 @@ static void LustreDirMapExecute(ClientContext &context, TableFunctionInput &data
 			lock_guard<mutex> lock(gstate.device_transition_lock);
 			idx_t current_dev = gstate.current_device_idx.load();
 			if (lstate.initialized_device_idx == current_dev &&
-			    (!gstate.use_sequential_scan ||
-			     (gstate.next_block_group.load() >= gstate.total_block_groups &&
-			      gstate.active_block_groups.load() == 0))) {
+			    (!gstate.use_sequential_scan || (gstate.next_block_group.load() >= gstate.total_block_groups &&
+			                                     gstate.active_block_groups.load() == 0))) {
 				gstate.device_initialized.store(false);
 				gstate.current_device_idx++;
 				gstate.next_fid_idx.store(0);
@@ -683,8 +660,7 @@ static void LustreDirMapExecute(ClientContext &context, TableFunctionInput &data
 // Cardinality Function
 //===----------------------------------------------------------------------===//
 
-static unique_ptr<NodeStatistics> LustreDirMapCardinality(ClientContext &context,
-                                                           const FunctionData *bind_data_p) {
+static unique_ptr<NodeStatistics> LustreDirMapCardinality(ClientContext &context, const FunctionData *bind_data_p) {
 	return make_uniq<NodeStatistics>(1000000000000);
 }
 
@@ -703,8 +679,8 @@ static void SetDirMapCommonProperties(TableFunction &func) {
 TableFunctionSet LustreDirMapFunction::GetFunctionSet() {
 	TableFunctionSet set("lustre_dirmap");
 
-	TableFunction single_func("lustre_dirmap", {LogicalType::VARCHAR}, LustreDirMapExecute,
-	                          LustreDirMapBindSingle, LustreDirMapInitGlobal, LustreDirMapInitLocal);
+	TableFunction single_func("lustre_dirmap", {LogicalType::VARCHAR}, LustreDirMapExecute, LustreDirMapBindSingle,
+	                          LustreDirMapInitGlobal, LustreDirMapInitLocal);
 	SetDirMapCommonProperties(single_func);
 	set.AddFunction(std::move(single_func));
 

@@ -119,8 +119,7 @@ static unique_ptr<FunctionData> Fid2PathBindMulti(ClientContext &context, Scalar
 // Local State Init
 //===----------------------------------------------------------------------===//
 
-static unique_ptr<FunctionLocalState> Fid2PathInitLocal(ExpressionState &state,
-                                                        const BoundFunctionExpression &expr,
+static unique_ptr<FunctionLocalState> Fid2PathInitLocal(ExpressionState &state, const BoundFunctionExpression &expr,
                                                         FunctionData *bind_data) {
 	return make_uniq<Fid2PathLocalState>();
 }
@@ -296,15 +295,14 @@ ScalarFunctionSet LustreFid2PathFunction::GetFunctionSet() {
 
 	// Overload 1: lustre_fid2path(fid VARCHAR, device VARCHAR) -> LIST(VARCHAR)
 	ScalarFunction single_func({LogicalType::VARCHAR, LogicalType::VARCHAR}, LogicalType::LIST(LogicalType::VARCHAR),
-	                           Fid2PathExecute, Fid2PathBindSingle, nullptr, nullptr,
-	                           Fid2PathInitLocal);
+	                           Fid2PathExecute, Fid2PathBindSingle, nullptr, nullptr, Fid2PathInitLocal);
 	single_func.null_handling = FunctionNullHandling::SPECIAL_HANDLING;
 	set.AddFunction(std::move(single_func));
 
 	// Overload 2: lustre_fid2path(fid VARCHAR, devices LIST(VARCHAR)) -> LIST(VARCHAR)
-	ScalarFunction multi_func({LogicalType::VARCHAR, LogicalType::LIST(LogicalType::VARCHAR)}, LogicalType::LIST(LogicalType::VARCHAR),
-	                          Fid2PathExecute, Fid2PathBindMulti, nullptr, nullptr,
-	                          Fid2PathInitLocal);
+	ScalarFunction multi_func({LogicalType::VARCHAR, LogicalType::LIST(LogicalType::VARCHAR)},
+	                          LogicalType::LIST(LogicalType::VARCHAR), Fid2PathExecute, Fid2PathBindMulti, nullptr,
+	                          nullptr, Fid2PathInitLocal);
 	multi_func.null_handling = FunctionNullHandling::SPECIAL_HANDLING;
 	set.AddFunction(std::move(multi_func));
 

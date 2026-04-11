@@ -32,10 +32,9 @@ static constexpr idx_t LINK_LAYOUT_EXACT_LOOKUP_BATCH_SIZE = 512;
 static constexpr idx_t LINK_LAYOUT_SEQ_SCAN_THRESHOLD = 8192;
 
 static const vector<string> LINK_LAYOUT_COLUMN_NAMES = {
-    "link_fid",      "parent_fid",   "name",          "layout_fid",   "comp_index",
-    "comp_id",       "mirror_id",    "comp_flags",    "extent_start", "extent_end",
-    "pattern",       "stripe_size",  "stripe_count",  "stripe_offset","pool",
-    "dstripe_count", "cstripe_count","compr_type",    "compr_lvl",    "layout_device"};
+    "link_fid",   "parent_fid",    "name",          "layout_fid", "comp_index",  "comp_id",      "mirror_id",
+    "comp_flags", "extent_start",  "extent_end",    "pattern",    "stripe_size", "stripe_count", "stripe_offset",
+    "pool",       "dstripe_count", "cstripe_count", "compr_type", "compr_lvl",   "layout_device"};
 
 static const vector<LogicalType> LINK_LAYOUT_COLUMN_TYPES = {
     LogicalType::VARCHAR,   LogicalType::VARCHAR,   LogicalType::VARCHAR,   LogicalType::VARCHAR,
@@ -62,9 +61,10 @@ struct LustreLinkLayoutsFilter {
 	bool HasDynamicFilter() const {
 		return (link_filter && link_filter->HasDynamicFilter()) ||
 		       (layout_fid_filter && layout_fid_filter->HasDynamicFilter()) ||
-		       std::any_of(layout_filters.begin(), layout_filters.end(), [](const pair<const idx_t, unique_ptr<TableFilter>> &entry) {
-			       return TableFilterHasDynamicFilter(*entry.second);
-		       });
+		       std::any_of(layout_filters.begin(), layout_filters.end(),
+		                   [](const pair<const idx_t, unique_ptr<TableFilter>> &entry) {
+			                   return TableFilterHasDynamicFilter(*entry.second);
+		                   });
 	}
 
 	bool HasAnyFilter() const {
@@ -104,13 +104,15 @@ struct LustreLinkLayoutsFilter {
 		} else if (has_link_fids) {
 			lookup_fids.insert(lookup_fids.end(), link_filter->fid_values.begin(), link_filter->fid_values.end());
 		} else if (has_layout_fids) {
-			lookup_fids.insert(lookup_fids.end(), layout_fid_filter->fid_values.begin(), layout_fid_filter->fid_values.end());
+			lookup_fids.insert(lookup_fids.end(), layout_fid_filter->fid_values.begin(),
+			                   layout_fid_filter->fid_values.end());
 		}
 		std::sort(lookup_fids.begin(), lookup_fids.end());
 		lookup_fids.erase(std::unique(lookup_fids.begin(), lookup_fids.end()), lookup_fids.end());
 	}
 
-	Value GetLayoutValue(idx_t actual_column_idx, const LustreLayoutComponent &layout, const string &device_path) const {
+	Value GetLayoutValue(idx_t actual_column_idx, const LustreLayoutComponent &layout,
+	                     const string &device_path) const {
 		switch (actual_column_idx) {
 		case 3:
 			return Value();
@@ -323,8 +325,7 @@ const vector<LogicalType> &LustreLinkLayoutsFunction::GetColumnTypes() {
 }
 
 static unique_ptr<FunctionData> LustreLinkLayoutsBindSingle(ClientContext &context, TableFunctionBindInput &input,
-                                                            vector<LogicalType> &return_types,
-                                                            vector<string> &names) {
+                                                            vector<LogicalType> &return_types, vector<string> &names) {
 	auto result = make_uniq<LustreQueryBindData>();
 	result->device_paths.push_back(StringValue::Get(input.inputs[0]));
 	ParseNamedParameters(input.named_parameters, result->scan_config);
@@ -335,8 +336,7 @@ static unique_ptr<FunctionData> LustreLinkLayoutsBindSingle(ClientContext &conte
 }
 
 static unique_ptr<FunctionData> LustreLinkLayoutsBindMulti(ClientContext &context, TableFunctionBindInput &input,
-                                                           vector<LogicalType> &return_types,
-                                                           vector<string> &names) {
+                                                           vector<LogicalType> &return_types, vector<string> &names) {
 	auto result = make_uniq<LustreQueryBindData>();
 	auto &list_values = ListValue::GetChildren(input.inputs[0]);
 	for (auto &val : list_values) {
@@ -522,8 +522,7 @@ static void ResetLinkLayoutsBlockGroupState(LustreLinkLayoutsLocalState &lstate)
 	lstate.block_group_batch_end = 0;
 }
 
-static bool ClaimNextLinkLayoutsBlockGroup(LustreLinkLayoutsGlobalState &gstate,
-                                           LustreLinkLayoutsLocalState &lstate) {
+static bool ClaimNextLinkLayoutsBlockGroup(LustreLinkLayoutsGlobalState &gstate, LustreLinkLayoutsLocalState &lstate) {
 	static constexpr int BLOCK_GROUP_BATCH_SIZE = 8;
 
 	if (lstate.block_group_active) {
@@ -769,9 +768,8 @@ static void LustreLinkLayoutsExecute(ClientContext &context, TableFunctionInput 
 			lock_guard<mutex> lock(gstate.device_transition_lock);
 			idx_t current_dev = gstate.current_device_idx.load();
 			if (lstate.initialized_device_idx == current_dev &&
-			    (!gstate.use_sequential_scan ||
-			     (gstate.next_block_group.load() >= gstate.total_block_groups &&
-			      gstate.active_block_groups.load() == 0))) {
+			    (!gstate.use_sequential_scan || (gstate.next_block_group.load() >= gstate.total_block_groups &&
+			                                     gstate.active_block_groups.load() == 0))) {
 				gstate.device_initialized.store(false);
 				gstate.current_device_idx++;
 				gstate.next_fid_idx.store(0);
@@ -805,11 +803,10 @@ static unique_ptr<NodeStatistics> LustreLinkLayoutsCardinality(ClientContext &co
 }
 
 TableFunction LustreLinkLayoutsFunction::GetFunction(bool multi_device) {
-	TableFunction func("lustre_link_layouts_internal",
-	                   {multi_device ? LogicalType::LIST(LogicalType::VARCHAR) : LogicalType::VARCHAR},
-	                   LustreLinkLayoutsExecute,
-	                   multi_device ? LustreLinkLayoutsBindMulti : LustreLinkLayoutsBindSingle,
-	                   LustreLinkLayoutsInitGlobal, LustreLinkLayoutsInitLocal);
+	TableFunction func(
+	    "lustre_link_layouts_internal", {multi_device ? LogicalType::LIST(LogicalType::VARCHAR) : LogicalType::VARCHAR},
+	    LustreLinkLayoutsExecute, multi_device ? LustreLinkLayoutsBindMulti : LustreLinkLayoutsBindSingle,
+	    LustreLinkLayoutsInitGlobal, LustreLinkLayoutsInitLocal);
 	func.named_parameters["skip_no_fid"] = LogicalType::BOOLEAN;
 	func.named_parameters["skip_no_linkea"] = LogicalType::BOOLEAN;
 	func.projection_pushdown = true;

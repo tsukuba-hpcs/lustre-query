@@ -32,10 +32,10 @@ static constexpr idx_t OBJECT_LAYOUT_EXACT_LOOKUP_BATCH_SIZE = 512;
 static constexpr idx_t OBJECT_LAYOUT_SEQ_SCAN_THRESHOLD = 8192;
 
 static const vector<string> OBJECT_LAYOUT_COLUMN_NAMES = {
-    "object_fid",       "object_comp_index", "stripe_index",  "ost_idx",       "ost_oi_id",   "ost_oi_seq",
-    "object_device",    "layout_fid",        "layout_comp_index", "comp_id",    "mirror_id",   "comp_flags",
-    "extent_start",     "extent_end",        "pattern",       "stripe_size",   "stripe_count", "stripe_offset",
-    "pool",             "dstripe_count",     "cstripe_count", "compr_type",    "compr_lvl",    "layout_device"};
+    "object_fid",    "object_comp_index", "stripe_index",      "ost_idx",     "ost_oi_id",    "ost_oi_seq",
+    "object_device", "layout_fid",        "layout_comp_index", "comp_id",     "mirror_id",    "comp_flags",
+    "extent_start",  "extent_end",        "pattern",           "stripe_size", "stripe_count", "stripe_offset",
+    "pool",          "dstripe_count",     "cstripe_count",     "compr_type",  "compr_lvl",    "layout_device"};
 
 static const vector<LogicalType> OBJECT_LAYOUT_COLUMN_TYPES = {
     LogicalType::VARCHAR,   LogicalType::UINTEGER,  LogicalType::UINTEGER,  LogicalType::UINTEGER,
@@ -115,9 +115,11 @@ struct LustreObjectLayoutsFilter {
 			                      layout_fid_filter->fid_values.begin(), layout_fid_filter->fid_values.end(),
 			                      std::back_inserter(lookup_fids));
 		} else if (has_object_fids) {
-			lookup_fids.insert(lookup_fids.end(), object_fid_filter->fid_values.begin(), object_fid_filter->fid_values.end());
+			lookup_fids.insert(lookup_fids.end(), object_fid_filter->fid_values.begin(),
+			                   object_fid_filter->fid_values.end());
 		} else if (has_layout_fids) {
-			lookup_fids.insert(lookup_fids.end(), layout_fid_filter->fid_values.begin(), layout_fid_filter->fid_values.end());
+			lookup_fids.insert(lookup_fids.end(), layout_fid_filter->fid_values.begin(),
+			                   layout_fid_filter->fid_values.end());
 		}
 		std::sort(lookup_fids.begin(), lookup_fids.end());
 		lookup_fids.erase(std::unique(lookup_fids.begin(), lookup_fids.end()), lookup_fids.end());
@@ -214,7 +216,8 @@ struct LustreObjectLayoutsFilter {
 		return true;
 	}
 
-	static unique_ptr<LustreObjectLayoutsFilter> Create(const TableFilterSet *filters, const vector<idx_t> &column_ids) {
+	static unique_ptr<LustreObjectLayoutsFilter> Create(const TableFilterSet *filters,
+	                                                    const vector<idx_t> &column_ids) {
 		auto result = make_uniq<LustreObjectLayoutsFilter>();
 		result->object_fid_filter = FIDOnlyFilter::Create(filters, column_ids, 0);
 		result->layout_fid_filter = FIDOnlyFilter::Create(filters, column_ids, 7);
@@ -325,8 +328,7 @@ static unique_ptr<FunctionData> LustreObjectLayoutsBindSingle(ClientContext &con
 }
 
 static unique_ptr<FunctionData> LustreObjectLayoutsBindMulti(ClientContext &context, TableFunctionBindInput &input,
-                                                             vector<LogicalType> &return_types,
-                                                             vector<string> &names) {
+                                                             vector<LogicalType> &return_types, vector<string> &names) {
 	auto result = make_uniq<LustreQueryBindData>();
 	auto &list_values = ListValue::GetChildren(input.inputs[0]);
 	for (auto &val : list_values) {
@@ -466,8 +468,7 @@ static void WriteObjectLayoutColumn(Vector &vec, idx_t col_idx, idx_t row_idx, c
 }
 
 static void ExpandObjectLayoutRows(vector<LustreObjectLayoutRow> &out, const LustreFID &fid,
-                                   const vector<LustreOSTObject> &objects,
-                                   const vector<LustreLayoutComponent> &layouts,
+                                   const vector<LustreOSTObject> &objects, const vector<LustreLayoutComponent> &layouts,
                                    const LustreObjectLayoutsFilter *filters, const string &device_path) {
 	if (objects.empty() || layouts.empty()) {
 		return;
@@ -749,9 +750,8 @@ static void LustreObjectLayoutsExecute(ClientContext &context, TableFunctionInpu
 			lock_guard<mutex> lock(gstate.device_transition_lock);
 			idx_t current_dev = gstate.current_device_idx.load();
 			if (lstate.initialized_device_idx == current_dev &&
-			    (!gstate.use_sequential_scan ||
-			     (gstate.next_block_group.load() >= gstate.total_block_groups &&
-			      gstate.active_block_groups.load() == 0))) {
+			    (!gstate.use_sequential_scan || (gstate.next_block_group.load() >= gstate.total_block_groups &&
+			                                     gstate.active_block_groups.load() == 0))) {
 				gstate.device_initialized.store(false);
 				gstate.current_device_idx++;
 				gstate.next_fid_idx.store(0);

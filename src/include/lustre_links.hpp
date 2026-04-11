@@ -27,12 +27,7 @@ namespace lustre {
 //===----------------------------------------------------------------------===//
 // Link Column Index Constants
 //===----------------------------------------------------------------------===//
-enum class LinkColumnIdx : idx_t {
-	FID = 0,
-	PARENT_FID = 1,
-	NAME = 2,
-	DEVICE = 3
-};
+enum class LinkColumnIdx : idx_t { FID = 0, PARENT_FID = 1, NAME = 2, DEVICE = 3 };
 
 //===----------------------------------------------------------------------===//
 // Link Filter - extracts FID/parent_fid values from WHERE clause
@@ -187,9 +182,8 @@ struct LustreLinksGlobalState : public GlobalTableFunctionState {
 		if (use_sequential_scan) {
 			return MinValue<idx_t>(thread_count, static_cast<idx_t>(MaxValue(total_block_groups, 1)));
 		}
-		idx_t fid_count = link_filter->HasFIDFilter()
-		    ? link_filter->fid_values.size()
-		    : link_filter->parent_fid_values.size();
+		idx_t fid_count =
+		    link_filter->HasFIDFilter() ? link_filter->fid_values.size() : link_filter->parent_fid_values.size();
 		return MinValue<idx_t>(fid_count, thread_count);
 	}
 };

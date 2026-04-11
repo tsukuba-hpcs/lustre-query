@@ -13,15 +13,15 @@ extern "C" {
 
 /* Lustre FID structure */
 struct lu_fid {
-    uint64_t f_seq;   /* Sequence number */
-    uint32_t f_oid;   /* Object ID */
-    uint32_t f_ver;   /* Version */
+	uint64_t f_seq; /* Sequence number */
+	uint32_t f_oid; /* Object ID */
+	uint32_t f_ver; /* Version */
 };
 
 /* OI lookup result */
 struct oi_result {
-    uint32_t ino;     /* Inode number */
-    uint32_t gen;     /* Generation number */
+	uint32_t ino; /* Inode number */
+	uint32_t gen; /* Generation number */
 };
 
 /* Opaque context */
@@ -50,8 +50,7 @@ void oi_close(struct oi_context *ctx);
  * @result: Output - inode number and generation
  * @returns: 0 on success, -ENOENT if not found, other negative errno on error
  */
-int oi_lookup(struct oi_context *ctx, const struct lu_fid *fid,
-              struct oi_result *result);
+int oi_lookup(struct oi_context *ctx, const struct lu_fid *fid, struct oi_result *result);
 
 /*
  * Get the number of OI files.

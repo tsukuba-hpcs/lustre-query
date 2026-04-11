@@ -30,39 +30,39 @@ namespace lustre {
 //===----------------------------------------------------------------------===//
 
 static const vector<string> COLUMN_NAMES = {
-    "fid",           // Lustre FID
-    "ino",           // Inode number
-    "type",          // File type (file/dir/link/...)
-    "mode",          // File mode (permissions)
-    "nlink",         // Hard link count
-    "uid",           // User ID
-    "gid",           // Group ID
-    "size",          // File size
-    "blocks",        // Block count
-    "atime",         // Access time
-    "mtime",         // Modification time
-    "ctime",         // Change time
-    "projid",        // Project ID
-    "flags",         // Inode flags
-    "device"         // Source device path
+    "fid",    // Lustre FID
+    "ino",    // Inode number
+    "type",   // File type (file/dir/link/...)
+    "mode",   // File mode (permissions)
+    "nlink",  // Hard link count
+    "uid",    // User ID
+    "gid",    // Group ID
+    "size",   // File size
+    "blocks", // Block count
+    "atime",  // Access time
+    "mtime",  // Modification time
+    "ctime",  // Change time
+    "projid", // Project ID
+    "flags",  // Inode flags
+    "device"  // Source device path
 };
 
 static const vector<LogicalType> COLUMN_TYPES = {
-    LogicalType::VARCHAR,     // fid
-    LogicalType::UBIGINT,     // ino
-    LogicalType::VARCHAR,     // type
-    LogicalType::UINTEGER,    // mode
-    LogicalType::UINTEGER,    // nlink
-    LogicalType::UINTEGER,    // uid
-    LogicalType::UINTEGER,    // gid
-    LogicalType::UBIGINT,     // size
-    LogicalType::UBIGINT,     // blocks
-    LogicalType::TIMESTAMP,   // atime
-    LogicalType::TIMESTAMP,   // mtime
-    LogicalType::TIMESTAMP,   // ctime
-    LogicalType::UINTEGER,    // projid
-    LogicalType::UINTEGER,    // flags
-    LogicalType::VARCHAR      // device
+    LogicalType::VARCHAR,   // fid
+    LogicalType::UBIGINT,   // ino
+    LogicalType::VARCHAR,   // type
+    LogicalType::UINTEGER,  // mode
+    LogicalType::UINTEGER,  // nlink
+    LogicalType::UINTEGER,  // uid
+    LogicalType::UINTEGER,  // gid
+    LogicalType::UBIGINT,   // size
+    LogicalType::UBIGINT,   // blocks
+    LogicalType::TIMESTAMP, // atime
+    LogicalType::TIMESTAMP, // mtime
+    LogicalType::TIMESTAMP, // ctime
+    LogicalType::UINTEGER,  // projid
+    LogicalType::UINTEGER,  // flags
+    LogicalType::VARCHAR    // device
 };
 
 const vector<string> &LustreInodesFunction::GetColumnNames() {
@@ -77,8 +77,7 @@ const vector<LogicalType> &LustreInodesFunction::GetColumnTypes() {
 // FID Filter Extraction (for OI lookup pushdown)
 //===----------------------------------------------------------------------===//
 
-static void ExtractFIDFilterValues(idx_t actual_col, const TableFilter &filter,
-                                   vector<LustreFID> &fid_values) {
+static void ExtractFIDFilterValues(idx_t actual_col, const TableFilter &filter, vector<LustreFID> &fid_values) {
 	// Only process fid column (column 0)
 	if (actual_col != static_cast<idx_t>(LustreColumnIdx::FID)) {
 		return;
@@ -181,10 +180,8 @@ static bool InodeScanRequiresXattrs(const TableFunctionInitInput &input, const M
 // Bind Function
 //===----------------------------------------------------------------------===//
 
-static unique_ptr<FunctionData> LustreInodesBindSingle(ClientContext &context,
-                                                      TableFunctionBindInput &input,
-                                                      vector<LogicalType> &return_types,
-                                                      vector<string> &names) {
+static unique_ptr<FunctionData> LustreInodesBindSingle(ClientContext &context, TableFunctionBindInput &input,
+                                                       vector<LogicalType> &return_types, vector<string> &names) {
 	auto result = make_uniq<LustreQueryBindData>();
 
 	// Single device path (VARCHAR overload)
@@ -203,10 +200,8 @@ static unique_ptr<FunctionData> LustreInodesBindSingle(ClientContext &context,
 	return std::move(result);
 }
 
-static unique_ptr<FunctionData> LustreInodesBindMulti(ClientContext &context,
-                                                     TableFunctionBindInput &input,
-                                                     vector<LogicalType> &return_types,
-                                                     vector<string> &names) {
+static unique_ptr<FunctionData> LustreInodesBindMulti(ClientContext &context, TableFunctionBindInput &input,
+                                                      vector<LogicalType> &return_types, vector<string> &names) {
 	auto result = make_uniq<LustreQueryBindData>();
 
 	// Multiple device paths (LIST(VARCHAR) overload)
@@ -237,10 +232,9 @@ static unique_ptr<FunctionData> LustreInodesBindMulti(ClientContext &context,
 //===----------------------------------------------------------------------===//
 
 static unique_ptr<GlobalTableFunctionState> LustreInodesInitGlobal(ClientContext &context,
-                                                                  TableFunctionInitInput &input) {
+                                                                   TableFunctionInitInput &input) {
 	auto &bind_data = input.bind_data->Cast<LustreQueryBindData>();
-	auto result = make_uniq<LustreQueryGlobalState>(bind_data.device_paths,
-	                                                input.column_ids, bind_data.scan_config);
+	auto result = make_uniq<LustreQueryGlobalState>(bind_data.device_paths, input.column_ids, bind_data.scan_config);
 	result->scan_config.read_xattrs = InodeScanRequiresXattrs(input, result->scan_config);
 
 	// Compile filters for pushdown
@@ -274,8 +268,8 @@ static unique_ptr<GlobalTableFunctionState> LustreInodesInitGlobal(ClientContext
 }
 
 static unique_ptr<LocalTableFunctionState> LustreInodesInitLocal(ExecutionContext &context,
-                                                                TableFunctionInitInput &input,
-                                                                GlobalTableFunctionState *global_state) {
+                                                                 TableFunctionInitInput &input,
+                                                                 GlobalTableFunctionState *global_state) {
 	return make_uniq<LustreQueryLocalState>();
 }
 
@@ -306,8 +300,8 @@ static void WriteTimestamp(Vector &vec, idx_t row_idx, int64_t unix_timestamp) {
 // Helper: Write a single column value for one inode directly into the vector
 //===----------------------------------------------------------------------===//
 
-static void WriteOutputColumn(Vector &vec, idx_t col_idx, idx_t row_idx,
-                              const LustreInode &inode, const string &device_path) {
+static void WriteOutputColumn(Vector &vec, idx_t col_idx, idx_t row_idx, const LustreInode &inode,
+                              const string &device_path) {
 	switch (col_idx) {
 	case 0: { // fid (VARCHAR)
 		if (inode.fid.IsValid()) {
@@ -419,12 +413,11 @@ static bool ClaimNextBlockGroup(LustreQueryGlobalState &gstate, LustreQueryLocal
 // Helper: Ensure local scanner is initialized for the current device
 //===----------------------------------------------------------------------===//
 
-static bool EnsureLocalScanner(LustreQueryGlobalState &gstate, LustreQueryLocalState &lstate,
-                               bool init_oi = false) {
+static bool EnsureLocalScanner(LustreQueryGlobalState &gstate, LustreQueryLocalState &lstate, bool init_oi = false) {
 	idx_t dev_idx = gstate.current_device_idx.load();
 
 	if (lstate.scanner_initialized && lstate.initialized_device_idx == dev_idx) {
-		return true;  // Already set up for the right device
+		return true; // Already set up for the right device
 	}
 
 	// Close old scanner if from a different device
@@ -467,9 +460,8 @@ static bool EnsureLocalScanner(LustreQueryGlobalState &gstate, LustreQueryLocalS
 // OI Lookup Execution Path (FID filter pushdown) - parallel by FID
 //===----------------------------------------------------------------------===//
 
-static void LustreInodesExecuteOILookup(LustreQueryGlobalState &gstate,
-                                         LustreQueryLocalState &lstate,
-                                         DataChunk &output) {
+static void LustreInodesExecuteOILookup(LustreQueryGlobalState &gstate, LustreQueryLocalState &lstate,
+                                        DataChunk &output) {
 	idx_t output_count = 0;
 
 	while (output_count < STANDARD_VECTOR_SIZE) {
@@ -515,8 +507,7 @@ static void LustreInodesExecuteOILookup(LustreQueryGlobalState &gstate,
 
 		// Write directly into output vectors
 		for (idx_t i = 0; i < gstate.column_ids.size(); i++) {
-			WriteOutputColumn(output.data[i], gstate.column_ids[i], output_count,
-			                  inode, current_device);
+			WriteOutputColumn(output.data[i], gstate.column_ids[i], output_count, inode, current_device);
 		}
 		output_count++;
 	}
@@ -531,9 +522,8 @@ static void LustreInodesExecuteOILookup(LustreQueryGlobalState &gstate,
 // Sequential Scan Execution Path - parallel by block group
 //===----------------------------------------------------------------------===//
 
-static void LustreInodesExecuteSeqScan(LustreQueryGlobalState &gstate,
-                                        LustreQueryLocalState &lstate,
-                                        DataChunk &output) {
+static void LustreInodesExecuteSeqScan(LustreQueryGlobalState &gstate, LustreQueryLocalState &lstate,
+                                       DataChunk &output) {
 	idx_t output_count = 0;
 	LustreInode inode;
 
@@ -577,7 +567,7 @@ static void LustreInodesExecuteSeqScan(LustreQueryGlobalState &gstate,
 				lstate.block_group_active = false;
 				gstate.active_block_groups.fetch_sub(1);
 				FlushPendingStats(gstate, lstate);
-				break;  // End of this block group
+				break; // End of this block group
 			}
 
 			lstate.pending_scanned++;
@@ -589,8 +579,7 @@ static void LustreInodesExecuteSeqScan(LustreQueryGlobalState &gstate,
 
 			// Write directly into output vectors
 			for (idx_t i = 0; i < gstate.column_ids.size(); i++) {
-				WriteOutputColumn(output.data[i], gstate.column_ids[i], output_count,
-				                  inode, current_device);
+				WriteOutputColumn(output.data[i], gstate.column_ids[i], output_count, inode, current_device);
 			}
 			output_count++;
 			lstate.pending_returned++;
@@ -600,8 +589,7 @@ static void LustreInodesExecuteSeqScan(LustreQueryGlobalState &gstate,
 	output.SetCardinality(output_count);
 }
 
-static void LustreInodesExecute(ClientContext &context, TableFunctionInput &data_p,
-                              DataChunk &output) {
+static void LustreInodesExecute(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
 	auto &gstate = data_p.global_state->Cast<LustreQueryGlobalState>();
 	auto &lstate = data_p.local_state->Cast<LustreQueryLocalState>();
 
@@ -621,8 +609,7 @@ static void LustreInodesExecute(ClientContext &context, TableFunctionInput &data
 // Cardinality Function
 //===----------------------------------------------------------------------===//
 
-static unique_ptr<NodeStatistics> LustreInodesCardinality(ClientContext &context,
-                                                         const FunctionData *bind_data_p) {
+static unique_ptr<NodeStatistics> LustreInodesCardinality(ClientContext &context, const FunctionData *bind_data_p) {
 	if (!bind_data_p) {
 		return nullptr;
 	}
@@ -650,8 +637,8 @@ TableFunctionSet LustreInodesFunction::GetFunctionSet() {
 	TableFunctionSet set("lustre_inodes");
 
 	// Overload 1: single device path (VARCHAR)
-	TableFunction single_func("lustre_inodes", {LogicalType::VARCHAR}, LustreInodesExecute,
-	                          LustreInodesBindSingle, LustreInodesInitGlobal, LustreInodesInitLocal);
+	TableFunction single_func("lustre_inodes", {LogicalType::VARCHAR}, LustreInodesExecute, LustreInodesBindSingle,
+	                          LustreInodesInitGlobal, LustreInodesInitLocal);
 	SetCommonProperties(single_func);
 	set.AddFunction(std::move(single_func));
 

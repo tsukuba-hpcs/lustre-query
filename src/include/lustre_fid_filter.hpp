@@ -77,8 +77,7 @@ struct FIDOnlyFilter {
 	bool ResolveDynamicFilters();
 
 	//! Create from DuckDB's TableFilterSet. fid_column_idx is the actual column index for FID.
-	static unique_ptr<FIDOnlyFilter> Create(const TableFilterSet *filters,
-	                                        const vector<idx_t> &column_ids,
+	static unique_ptr<FIDOnlyFilter> Create(const TableFilterSet *filters, const vector<idx_t> &column_ids,
 	                                        idx_t fid_column_idx);
 };
 
