@@ -17,10 +17,10 @@
 #include "lustre_links.hpp"
 #include "lustre_layouts.hpp"
 #include "lustre_objects.hpp"
-#include "lustre_dirmap.hpp"
-#include "lustre_link_dirmap.hpp"
-#include "lustre_inode_dirmap.hpp"
-#include "lustre_link_inode_dirmap.hpp"
+#include "lustre_dirstripe.hpp"
+#include "lustre_link_dirstripe.hpp"
+#include "lustre_inode_dirstripe.hpp"
+#include "lustre_link_inode_dirstripe.hpp"
 #include "lustre_fid2path.hpp"
 #include "lustre_path2fid.hpp"
 #include "lustre_optimizer.hpp"
@@ -61,17 +61,17 @@ static void LoadInternal(ExtensionLoader &loader) {
 	// Register the lustre_objects table function set
 	loader.RegisterFunction(lustre::LustreObjectsFunction::GetFunctionSet());
 
-	// Register the lustre_dirmap table function set
-	loader.RegisterFunction(lustre::LustreDirMapFunction::GetFunctionSet());
+	// Register the lustre_dirstripe table function set
+	loader.RegisterFunction(lustre::LustreDirStripeFunction::GetFunctionSet());
 
-	// Register the fused link/dirmap table function set
-	loader.RegisterFunction(lustre::LustreLinkDirMapFunction::GetFunctionSet());
+	// Register the fused link/dirstripe table function set
+	loader.RegisterFunction(lustre::LustreLinkDirStripeFunction::GetFunctionSet());
 
-	// Register the fused inode/dirmap table function set
-	loader.RegisterFunction(lustre::LustreInodeDirMapFunction::GetFunctionSet());
+	// Register the fused inode/dirstripe table function set
+	loader.RegisterFunction(lustre::LustreInodeDirStripeFunction::GetFunctionSet());
 
-	// Register the fused link/inode/dirmap table function set
-	loader.RegisterFunction(lustre::LustreLinkInodeDirMapFunction::GetFunctionSet());
+	// Register the fused link/inode/dirstripe table function set
+	loader.RegisterFunction(lustre::LustreLinkInodeDirStripeFunction::GetFunctionSet());
 
 	// Register the lustre_fid2path scalar function set
 	loader.RegisterFunction(lustre::LustreFid2PathFunction::GetFunctionSet());

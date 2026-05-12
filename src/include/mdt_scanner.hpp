@@ -265,14 +265,14 @@ public:
 
 	//! Sequential scan: next directory inode with FID, LMV, LinkEA, dir entries, and LMA incompat flags.
 	//! Skips agent inodes (LMAI_AGENT).
-	bool GetNextDirMapEntries(ext2_ino_t &ino_out, LustreFID &fid_out, LustreLMV &lmv_out,
-	                          std::vector<LinkEntry> &links_out, std::vector<DirEntry> &dir_entries_out,
-	                          uint32_t &lma_incompat_out, const MDTScanConfig &config);
+	bool GetNextDirStripeEntries(ext2_ino_t &ino_out, LustreFID &fid_out, LustreLMV &lmv_out,
+	                             std::vector<LinkEntry> &links_out, std::vector<DirEntry> &dir_entries_out,
+	                             uint32_t &lma_incompat_out, const MDTScanConfig &config);
 
 	//! Same with upper bound for block-group-bounded parallel scan
-	bool GetNextDirMapEntries(ext2_ino_t &ino_out, LustreFID &fid_out, LustreLMV &lmv_out,
-	                          std::vector<LinkEntry> &links_out, std::vector<DirEntry> &dir_entries_out,
-	                          uint32_t &lma_incompat_out, const MDTScanConfig &config, ext2_ino_t max_ino);
+	bool GetNextDirStripeEntries(ext2_ino_t &ino_out, LustreFID &fid_out, LustreLMV &lmv_out,
+	                             std::vector<LinkEntry> &links_out, std::vector<DirEntry> &dir_entries_out,
+	                             uint32_t &lma_incompat_out, const MDTScanConfig &config, ext2_ino_t max_ino);
 
 	//! Read directory entries (children) of a directory inode
 	bool ReadDirectoryEntries(ext2_ino_t dir_ino, std::vector<DirEntry> &entries_out);

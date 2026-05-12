@@ -1,10 +1,10 @@
 //===----------------------------------------------------------------------===//
 //                         LustreQuery Extension
 //
-// lustre_inode_dirmap.hpp
+// lustre_link_inode_dirstripe.hpp
 //
-// Internal fused table function for inode/dirmap joins.
-// Co-scans directory inodes and generates dirmap rows inline.
+// Internal fused table function for 3-way link/dirstripe/inode joins.
+// Scans links and resolves parent_fid → dir_fid → inode inline via cached lookups.
 //===----------------------------------------------------------------------===//
 
 #pragma once
@@ -15,7 +15,7 @@
 namespace duckdb {
 namespace lustre {
 
-class LustreInodeDirMapFunction {
+class LustreLinkInodeDirStripeFunction {
 public:
 	static TableFunctionSet GetFunctionSet();
 	static TableFunction GetFunction(bool multi_device);

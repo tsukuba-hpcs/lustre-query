@@ -2362,12 +2362,12 @@ bool MDTScanner::LookupName(ext2_ino_t dir_ino, const std::string &name, ext2_in
 }
 
 //===----------------------------------------------------------------------===//
-// GetNextDirMapEntries - sequential scan for directory inodes with LMV/LinkEA
+// GetNextDirStripeEntries - sequential scan for directory inodes with LMV/LinkEA
 //===----------------------------------------------------------------------===//
 
-bool MDTScanner::GetNextDirMapEntries(ext2_ino_t &ino_out, LustreFID &fid_out, LustreLMV &lmv_out,
-                                      std::vector<LinkEntry> &links_out, std::vector<DirEntry> &dir_entries_out,
-                                      uint32_t &lma_incompat_out, const MDTScanConfig &config) {
+bool MDTScanner::GetNextDirStripeEntries(ext2_ino_t &ino_out, LustreFID &fid_out, LustreLMV &lmv_out,
+                                         std::vector<LinkEntry> &links_out, std::vector<DirEntry> &dir_entries_out,
+                                         uint32_t &lma_incompat_out, const MDTScanConfig &config) {
 	ext2_ino_t ino;
 
 	while (true) {
@@ -2414,9 +2414,9 @@ bool MDTScanner::GetNextDirMapEntries(ext2_ino_t &ino_out, LustreFID &fid_out, L
 	}
 }
 
-bool MDTScanner::GetNextDirMapEntries(ext2_ino_t &ino_out, LustreFID &fid_out, LustreLMV &lmv_out,
-                                      std::vector<LinkEntry> &links_out, std::vector<DirEntry> &dir_entries_out,
-                                      uint32_t &lma_incompat_out, const MDTScanConfig &config, ext2_ino_t max_ino) {
+bool MDTScanner::GetNextDirStripeEntries(ext2_ino_t &ino_out, LustreFID &fid_out, LustreLMV &lmv_out,
+                                         std::vector<LinkEntry> &links_out, std::vector<DirEntry> &dir_entries_out,
+                                         uint32_t &lma_incompat_out, const MDTScanConfig &config, ext2_ino_t max_ino) {
 	ext2_ino_t ino;
 
 	while (true) {

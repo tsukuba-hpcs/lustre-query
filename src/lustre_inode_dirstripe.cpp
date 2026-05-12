@@ -1,13 +1,13 @@
 //===----------------------------------------------------------------------===//
 //                         LustreQuery Extension
 //
-// lustre_inode_dirmap.cpp
+// lustre_inode_dirstripe.cpp
 //
-// Fused inode/dirmap table function: co-scans directory inodes and generates
-// dirmap rows inline. Join: inodes.fid = dirmap.dir_fid
+// Fused inode/dirstripe table function: co-scans directory inodes and generates
+// dirstripe rows inline. Join: inodes.fid = dirstripe.dir_fid
 //===----------------------------------------------------------------------===//
 
-#include "lustre_inode_dirmap.hpp"
+#include "lustre_inode_dirstripe.hpp"
 #include "lustre_output_string_cache.hpp"
 #include "lustre_types.hpp"
 #include "lustre_scan_state.hpp"
@@ -24,20 +24,20 @@
 namespace duckdb {
 namespace lustre {
 
-static constexpr idx_t INODE_DIRMAP_SEQ_SCAN_THRESHOLD = 8192;
+static constexpr idx_t INODE_DIRSTRIPE_SEQ_SCAN_THRESHOLD = 8192;
 
 //===----------------------------------------------------------------------===//
 // Column Definitions
 //===----------------------------------------------------------------------===//
 
-static const vector<string> INODE_DIRMAP_COLUMN_NAMES = {
+static const vector<string> INODE_DIRSTRIPE_COLUMN_NAMES = {
     "inode_fid",    "ino",          "type",       "mode",           "nlink",
     "uid",          "gid",          "size",       "blocks",         "atime",
     "mtime",        "ctime",        "projid",     "flags",          "device",
     "dir_fid",      "parent_fid",   "dir_device", "parent_device",  "master_mdt_index",
     "stripe_index", "stripe_count", "hash_type",  "layout_version", "source"};
 
-static const vector<LogicalType> INODE_DIRMAP_COLUMN_TYPES = {
+static const vector<LogicalType> INODE_DIRSTRIPE_COLUMN_TYPES = {
     LogicalType::VARCHAR,  LogicalType::UBIGINT,   LogicalType::VARCHAR,   LogicalType::UINTEGER,
     LogicalType::UINTEGER, LogicalType::UINTEGER,  LogicalType::UINTEGER,  LogicalType::UBIGINT,
     LogicalType::UBIGINT,  LogicalType::TIMESTAMP, LogicalType::TIMESTAMP, LogicalType::TIMESTAMP,
@@ -50,7 +50,7 @@ static const vector<LogicalType> INODE_DIRMAP_COLUMN_TYPES = {
 // PendingRow
 //===----------------------------------------------------------------------===//
 
-struct InodeDirMapPendingRow {
+struct InodeDirStripePendingRow {
 	LustreInode inode;
 	LustreFID dir_fid;
 	LustreFID parent_fid;
@@ -68,7 +68,7 @@ struct InodeDirMapPendingRow {
 // Global State
 //===----------------------------------------------------------------------===//
 
-struct InodeDirMapGlobalState : public GlobalTableFunctionState {
+struct InodeDirStripeGlobalState : public GlobalTableFunctionState {
 	vector<string> device_paths;
 	vector<idx_t> column_ids;
 	MDTScanConfig scan_config;
@@ -104,7 +104,7 @@ struct InodeDirMapGlobalState : public GlobalTableFunctionState {
 // Local State
 //===----------------------------------------------------------------------===//
 
-struct InodeDirMapLocalState : public LocalTableFunctionState {
+struct InodeDirStripeLocalState : public LocalTableFunctionState {
 	unique_ptr<MDTScanner> scanner;
 	bool scanner_initialized = false;
 	idx_t initialized_device_idx = DConstants::INVALID_INDEX;
@@ -114,14 +114,14 @@ struct InodeDirMapLocalState : public LocalTableFunctionState {
 	int next_block_group_in_batch = 0;
 	int block_group_batch_end = 0;
 
-	vector<InodeDirMapPendingRow> pending;
+	vector<InodeDirStripePendingRow> pending;
 	idx_t pending_idx = 0;
 
 	vector<unique_ptr<MDTScanner>> resolve_scanners;
 	vector<string> resolve_device_paths;
 	bool resolve_initialized = false;
 
-	InodeDirMapLocalState() {
+	InodeDirStripeLocalState() {
 		scanner = make_uniq<MDTScanner>();
 	}
 
@@ -161,8 +161,8 @@ static unique_ptr<FunctionData> BindSingle(ClientContext &, TableFunctionBindInp
 	r->device_paths.push_back(StringValue::Get(input.inputs[0]));
 	ParseNamedParameters(input.named_parameters, r->scan_config);
 	r->scan_config.skip_no_linkea = false;
-	names = INODE_DIRMAP_COLUMN_NAMES;
-	ret = INODE_DIRMAP_COLUMN_TYPES;
+	names = INODE_DIRSTRIPE_COLUMN_NAMES;
+	ret = INODE_DIRSTRIPE_COLUMN_TYPES;
 	return std::move(r);
 }
 
@@ -172,11 +172,11 @@ static unique_ptr<FunctionData> BindMulti(ClientContext &, TableFunctionBindInpu
 	for (auto &v : ListValue::GetChildren(input.inputs[0]))
 		r->device_paths.push_back(StringValue::Get(v));
 	if (r->device_paths.empty())
-		throw BinderException("lustre_inode_dirmap requires at least one device path");
+		throw BinderException("lustre_inode_dirstripe requires at least one device path");
 	ParseNamedParameters(input.named_parameters, r->scan_config);
 	r->scan_config.skip_no_linkea = false;
-	names = INODE_DIRMAP_COLUMN_NAMES;
-	ret = INODE_DIRMAP_COLUMN_TYPES;
+	names = INODE_DIRSTRIPE_COLUMN_NAMES;
+	ret = INODE_DIRSTRIPE_COLUMN_TYPES;
 	return std::move(r);
 }
 
@@ -186,7 +186,7 @@ static unique_ptr<FunctionData> BindMulti(ClientContext &, TableFunctionBindInpu
 
 static unique_ptr<GlobalTableFunctionState> InitGlobal(ClientContext &ctx, TableFunctionInitInput &input) {
 	auto &bind = input.bind_data->Cast<LustreQueryBindData>();
-	auto g = make_uniq<InodeDirMapGlobalState>();
+	auto g = make_uniq<InodeDirStripeGlobalState>();
 	g->device_paths = bind.device_paths;
 	g->column_ids = input.column_ids;
 	g->scan_config = bind.scan_config;
@@ -200,7 +200,7 @@ static unique_ptr<GlobalTableFunctionState> InitGlobal(ClientContext &ctx, Table
 	g->fid_filter = FIDOnlyFilter::Create(input.filters.get(), input.column_ids, 0);
 	g->use_sequential_scan =
 	    g->fid_filter && (g->fid_filter->RequiresGenericEvaluation() || !g->fid_filter->HasFIDFilter() ||
-	                      g->fid_filter->fid_values.size() > INODE_DIRMAP_SEQ_SCAN_THRESHOLD);
+	                      g->fid_filter->fid_values.size() > INODE_DIRSTRIPE_SEQ_SCAN_THRESHOLD);
 	if (g->use_sequential_scan && !g->device_paths.empty()) {
 		MDTScanner probe;
 		probe.Open(g->device_paths[0]);
@@ -215,14 +215,14 @@ static unique_ptr<GlobalTableFunctionState> InitGlobal(ClientContext &ctx, Table
 
 static unique_ptr<LocalTableFunctionState> InitLocal(ExecutionContext &, TableFunctionInitInput &,
                                                      GlobalTableFunctionState *) {
-	return make_uniq<InodeDirMapLocalState>();
+	return make_uniq<InodeDirStripeLocalState>();
 }
 
 //===----------------------------------------------------------------------===//
 // WriteRow
 //===----------------------------------------------------------------------===//
 
-static void WriteRow(DataChunk &output, idx_t row, const vector<idx_t> &cols, const InodeDirMapPendingRow &r,
+static void WriteRow(DataChunk &output, idx_t row, const vector<idx_t> &cols, const InodeDirStripePendingRow &r,
                      const string &dev, LustreOutputStringCache &string_cache) {
 	for (idx_t i = 0; i < cols.size(); i++) {
 		auto &vec = output.data[i];
@@ -309,16 +309,17 @@ static void WriteRow(DataChunk &output, idx_t row, const vector<idx_t> &cols, co
 }
 
 //===----------------------------------------------------------------------===//
-// GenerateRows — same logic as lustre_dirmap but attaches inode metadata
+// GenerateRows — same logic as lustre_dirstripe but attaches inode metadata
 //===----------------------------------------------------------------------===//
 
 static void GenerateRows(const LustreInode &inode, const LustreFID &fid, const LustreLMV &lmv,
                          const std::vector<LinkEntry> &links, const std::vector<DirEntry> &dir_entries,
-                         const std::string &device, InodeDirMapLocalState &lstate, vector<InodeDirMapPendingRow> &out) {
+                         const std::string &device, InodeDirStripeLocalState &lstate,
+                         vector<InodeDirStripePendingRow> &out) {
 	out.clear();
 
 	if (!lmv.IsValid()) {
-		InodeDirMapPendingRow r;
+		InodeDirStripePendingRow r;
 		r.inode = inode;
 		r.dir_fid = fid;
 		r.parent_fid = fid;
@@ -332,7 +333,7 @@ static void GenerateRows(const LustreInode &inode, const LustreFID &fid, const L
 	if (lmv.IsMaster()) {
 		// Stripe 0 = master itself
 		{
-			InodeDirMapPendingRow r;
+			InodeDirStripePendingRow r;
 			r.inode = inode;
 			r.dir_fid = fid;
 			r.parent_fid = fid;
@@ -363,7 +364,7 @@ static void GenerateRows(const LustreInode &inode, const LustreFID &fid, const L
 			std::string shard_dev;
 			lstate.ResolveFIDToDevice(shard_fid, shard_dev);
 
-			InodeDirMapPendingRow r;
+			InodeDirStripePendingRow r;
 			r.inode = inode;
 			r.dir_fid = fid;
 			r.parent_fid = shard_fid;
@@ -387,14 +388,14 @@ static void GenerateRows(const LustreInode &inode, const LustreFID &fid, const L
 // Block Group Helpers
 //===----------------------------------------------------------------------===//
 
-static void ResetBG(InodeDirMapLocalState &l) {
+static void ResetBG(InodeDirStripeLocalState &l) {
 	l.block_group_active = false;
 	l.block_group_max_ino = 0;
 	l.next_block_group_in_batch = 0;
 	l.block_group_batch_end = 0;
 }
 
-static bool InitDevice(InodeDirMapGlobalState &g, idx_t dev) {
+static bool InitDevice(InodeDirStripeGlobalState &g, idx_t dev) {
 	if (dev >= g.device_paths.size()) {
 		g.finished = true;
 		return false;
@@ -416,7 +417,7 @@ static bool InitDevice(InodeDirMapGlobalState &g, idx_t dev) {
 	return true;
 }
 
-static bool EnsureScanner(InodeDirMapGlobalState &g, InodeDirMapLocalState &l, bool seq) {
+static bool EnsureScanner(InodeDirStripeGlobalState &g, InodeDirStripeLocalState &l, bool seq) {
 	idx_t dev = g.current_device_idx.load();
 	if (l.scanner_initialized && l.initialized_device_idx == dev)
 		return true;
@@ -447,7 +448,7 @@ static bool EnsureScanner(InodeDirMapGlobalState &g, InodeDirMapLocalState &l, b
 	return true;
 }
 
-static bool ClaimBG(InodeDirMapGlobalState &g, InodeDirMapLocalState &l) {
+static bool ClaimBG(InodeDirStripeGlobalState &g, InodeDirStripeLocalState &l) {
 	static constexpr int BATCH = 8;
 	if (l.block_group_active)
 		return true;
@@ -474,14 +475,14 @@ static bool ClaimBG(InodeDirMapGlobalState &g, InodeDirMapLocalState &l) {
 //===----------------------------------------------------------------------===//
 
 static void Execute(ClientContext &ctx, TableFunctionInput &data_p, DataChunk &output) {
-	auto &g = data_p.global_state->Cast<InodeDirMapGlobalState>();
-	auto &l = data_p.local_state->Cast<InodeDirMapLocalState>();
+	auto &g = data_p.global_state->Cast<InodeDirStripeGlobalState>();
+	auto &l = data_p.local_state->Cast<InodeDirStripeLocalState>();
 
 	if (g.fid_filter->HasDynamicFilter()) {
 		bool changed = g.fid_filter->ResolveDynamicFilters();
 		if (changed) {
 			g.use_sequential_scan = g.fid_filter->RequiresGenericEvaluation() || !g.fid_filter->HasFIDFilter() ||
-			                        g.fid_filter->fid_values.size() > INODE_DIRMAP_SEQ_SCAN_THRESHOLD;
+			                        g.fid_filter->fid_values.size() > INODE_DIRSTRIPE_SEQ_SCAN_THRESHOLD;
 			g.finished = false;
 			g.next_fid_idx.store(0);
 			g.next_block_group.store(0);
@@ -539,8 +540,8 @@ static void Execute(ClientContext &ctx, TableFunctionInput &data_p, DataChunk &o
 		std::vector<DirEntry> dir_entries;
 		uint32_t lma_incompat = 0;
 
-		if (!l.scanner->GetNextDirMapEntries(ino, fid, lmv, links, dir_entries, lma_incompat, g.scan_config,
-		                                     l.block_group_max_ino)) {
+		if (!l.scanner->GetNextDirStripeEntries(ino, fid, lmv, links, dir_entries, lma_incompat, g.scan_config,
+		                                        l.block_group_max_ino)) {
 			l.block_group_active = false;
 			g.active_block_groups.fetch_sub(1);
 			continue;
@@ -581,35 +582,35 @@ static void SetProps(TableFunction &f) {
 }
 
 static const vector<string> &GetNames() {
-	static const vector<string> n = INODE_DIRMAP_COLUMN_NAMES;
+	static const vector<string> n = INODE_DIRSTRIPE_COLUMN_NAMES;
 	return n;
 }
 static const vector<LogicalType> &GetTypes() {
-	static const vector<LogicalType> t = INODE_DIRMAP_COLUMN_TYPES;
+	static const vector<LogicalType> t = INODE_DIRSTRIPE_COLUMN_TYPES;
 	return t;
 }
 
-const vector<string> &LustreInodeDirMapFunction::GetColumnNames() {
+const vector<string> &LustreInodeDirStripeFunction::GetColumnNames() {
 	return GetNames();
 }
-const vector<LogicalType> &LustreInodeDirMapFunction::GetColumnTypes() {
+const vector<LogicalType> &LustreInodeDirStripeFunction::GetColumnTypes() {
 	return GetTypes();
 }
 
-TableFunction LustreInodeDirMapFunction::GetFunction(bool multi) {
+TableFunction LustreInodeDirStripeFunction::GetFunction(bool multi) {
 	if (multi) {
-		TableFunction f("lustre_inode_dirmap", {LogicalType::LIST(LogicalType::VARCHAR)}, Execute, BindMulti,
+		TableFunction f("lustre_inode_dirstripe", {LogicalType::LIST(LogicalType::VARCHAR)}, Execute, BindMulti,
 		                InitGlobal, InitLocal);
 		SetProps(f);
 		return f;
 	}
-	TableFunction f("lustre_inode_dirmap", {LogicalType::VARCHAR}, Execute, BindSingle, InitGlobal, InitLocal);
+	TableFunction f("lustre_inode_dirstripe", {LogicalType::VARCHAR}, Execute, BindSingle, InitGlobal, InitLocal);
 	SetProps(f);
 	return f;
 }
 
-TableFunctionSet LustreInodeDirMapFunction::GetFunctionSet() {
-	TableFunctionSet set("lustre_inode_dirmap");
+TableFunctionSet LustreInodeDirStripeFunction::GetFunctionSet() {
+	TableFunctionSet set("lustre_inode_dirstripe");
 	set.AddFunction(GetFunction(false));
 	set.AddFunction(GetFunction(true));
 	return set;

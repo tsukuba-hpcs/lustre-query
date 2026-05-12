@@ -1,13 +1,13 @@
 //===----------------------------------------------------------------------===//
 //                         LustreQuery Extension
 //
-// lustre_link_inode_dirmap.cpp
+// lustre_link_inode_dirstripe.cpp
 //
-// Fused 3-way link/dirmap/inode table function: scans links, resolves
+// Fused 3-way link/dirstripe/inode table function: scans links, resolves
 // parent_fid → dir_fid via cached LMV, resolves dir_fid → inode via cached OI.
 //===----------------------------------------------------------------------===//
 
-#include "lustre_link_inode_dirmap.hpp"
+#include "lustre_link_inode_dirstripe.hpp"
 #include "lustre_link_selection.hpp"
 #include "lustre_output_string_cache.hpp"
 #include "lustre_types.hpp"
@@ -31,7 +31,7 @@ namespace lustre {
 static constexpr idx_t LID_SEQ_SCAN_THRESHOLD = 8192;
 
 //===----------------------------------------------------------------------===//
-// Column Definitions (link 0-3, dirmap 4-13, inode 14-28)
+// Column Definitions (link 0-3, dirstripe 4-13, inode 14-28)
 //===----------------------------------------------------------------------===//
 
 static const vector<string> LID_COLUMN_NAMES = {"fid",
@@ -39,7 +39,7 @@ static const vector<string> LID_COLUMN_NAMES = {"fid",
                                                 "name",
                                                 "link_device",
                                                 "dir_fid",
-                                                "dirmap_parent_fid",
+                                                "dirstripe_parent_fid",
                                                 "dir_device",
                                                 "parent_device",
                                                 "master_mdt_index",
@@ -78,7 +78,7 @@ static const vector<LogicalType> LID_COLUMN_TYPES = {
 // Cache Structures
 //===----------------------------------------------------------------------===//
 
-struct DirMapCacheEntry {
+struct DirStripeCacheEntry {
 	LustreFID dir_fid;
 	std::string dir_device;
 	uint32_t master_mdt_index = 0;
@@ -152,7 +152,7 @@ struct LIDLocalState : public LocalTableFunctionState {
 
 	vector<unique_ptr<MDTScanner>> resolve_scanners;
 
-	std::unordered_map<LustreFID, DirMapCacheEntry, FIDHash> dirmap_cache;
+	std::unordered_map<LustreFID, DirStripeCacheEntry, FIDHash> dirstripe_cache;
 	std::unordered_map<LustreFID, LustreInode, FIDHash> inode_cache;
 
 	LIDLocalState() {
@@ -236,9 +236,9 @@ struct LIDLocalState : public LocalTableFunctionState {
 		return false;
 	}
 
-	bool ResolveDirMap(const LIDGlobalState &g, const LustreFID &parent_fid, DirMapCacheEntry &out) {
-		auto it = dirmap_cache.find(parent_fid);
-		if (it != dirmap_cache.end()) {
+	bool ResolveDirStripe(const LIDGlobalState &g, const LustreFID &parent_fid, DirStripeCacheEntry &out) {
+		auto it = dirstripe_cache.find(parent_fid);
+		if (it != dirstripe_cache.end()) {
 			out = it->second;
 			return true;
 		}
@@ -248,7 +248,7 @@ struct LIDLocalState : public LocalTableFunctionState {
 		if (!LookupFIDCrossMDT(g, parent_fid, ino, sidx))
 			return false;
 
-		DirMapCacheEntry entry;
+		DirStripeCacheEntry entry;
 		entry.dir_fid = parent_fid;
 		entry.dir_device = g.device_paths[sidx];
 
@@ -287,7 +287,7 @@ struct LIDLocalState : public LocalTableFunctionState {
 			entry.layout_version = lmv.lmv_layout_version;
 		}
 
-		dirmap_cache[parent_fid] = entry;
+		dirstripe_cache[parent_fid] = entry;
 		out = entry;
 		return true;
 	}
@@ -338,7 +338,7 @@ static unique_ptr<FunctionData> BindMulti(ClientContext &, TableFunctionBindInpu
 	for (auto &v : ListValue::GetChildren(input.inputs[0]))
 		r->device_paths.push_back(StringValue::Get(v));
 	if (r->device_paths.empty())
-		throw BinderException("lustre_link_inode_dirmap requires at least one device path");
+		throw BinderException("lustre_link_inode_dirstripe requires at least one device path");
 	ParseNamedParameters(input.named_parameters, r->scan_config);
 	names = LID_COLUMN_NAMES;
 	ret = LID_COLUMN_TYPES;
@@ -403,7 +403,7 @@ static unique_ptr<LocalTableFunctionState> InitLocal(ExecutionContext &, TableFu
 //===----------------------------------------------------------------------===//
 
 static void WriteRow(DataChunk &output, idx_t row, const vector<idx_t> &cols, const LustreLink &link,
-                     const DirMapCacheEntry &dm, bool dm_ok, const LustreInode &dir_inode, bool inode_ok,
+                     const DirStripeCacheEntry &dm, bool dm_ok, const LustreInode &dir_inode, bool inode_ok,
                      const string &link_device, const string &inode_device, LustreOutputStringCache &string_cache) {
 	for (idx_t i = 0; i < cols.size(); i++) {
 		auto &vec = output.data[i];
@@ -421,7 +421,7 @@ static void WriteRow(DataChunk &output, idx_t row, const vector<idx_t> &cols, co
 		case 3:
 			FlatVector::GetData<string_t>(vec)[row] = string_cache.GetString(vec, i, link_device);
 			break;
-		// DirMap columns 4-13
+		// DirStripe columns 4-13
 		case 4:
 			if (dm_ok)
 				FlatVector::GetData<string_t>(vec)[row] = string_cache.GetFID(vec, i, dm.dir_fid);
@@ -717,7 +717,7 @@ static void Execute(ClientContext &ctx, TableFunctionInput &data_p, DataChunk &o
 		LustreLink link;
 		if (!l.scanner->GetNextLink(link, g.scan_config, l.block_group_max_ino)) {
 			l.block_group_active = false;
-			l.dirmap_cache.clear();
+			l.dirstripe_cache.clear();
 			l.inode_cache.clear();
 			g.active_block_groups.fetch_sub(1);
 			continue;
@@ -728,9 +728,9 @@ static void Execute(ClientContext &ctx, TableFunctionInput &data_p, DataChunk &o
 		if (g.fid_filter->RequiresGenericEvaluation() && !g.fid_filter->EvaluateFID(link.fid))
 			continue;
 
-		// Resolve dirmap
-		DirMapCacheEntry dm;
-		bool dm_ok = l.ResolveDirMap(g, link.parent_fid, dm);
+		// Resolve dirstripe
+		DirStripeCacheEntry dm;
+		bool dm_ok = l.ResolveDirStripe(g, link.parent_fid, dm);
 
 		// Resolve directory inode
 		LustreInode dir_inode;
@@ -779,27 +779,27 @@ static const vector<LogicalType> &GetTypes() {
 	return t;
 }
 
-const vector<string> &LustreLinkInodeDirMapFunction::GetColumnNames() {
+const vector<string> &LustreLinkInodeDirStripeFunction::GetColumnNames() {
 	return GetNames();
 }
-const vector<LogicalType> &LustreLinkInodeDirMapFunction::GetColumnTypes() {
+const vector<LogicalType> &LustreLinkInodeDirStripeFunction::GetColumnTypes() {
 	return GetTypes();
 }
 
-TableFunction LustreLinkInodeDirMapFunction::GetFunction(bool multi) {
+TableFunction LustreLinkInodeDirStripeFunction::GetFunction(bool multi) {
 	if (multi) {
-		TableFunction f("lustre_link_inode_dirmap", {LogicalType::LIST(LogicalType::VARCHAR)}, Execute, BindMulti,
+		TableFunction f("lustre_link_inode_dirstripe", {LogicalType::LIST(LogicalType::VARCHAR)}, Execute, BindMulti,
 		                InitGlobal, InitLocal);
 		SetProps(f);
 		return f;
 	}
-	TableFunction f("lustre_link_inode_dirmap", {LogicalType::VARCHAR}, Execute, BindSingle, InitGlobal, InitLocal);
+	TableFunction f("lustre_link_inode_dirstripe", {LogicalType::VARCHAR}, Execute, BindSingle, InitGlobal, InitLocal);
 	SetProps(f);
 	return f;
 }
 
-TableFunctionSet LustreLinkInodeDirMapFunction::GetFunctionSet() {
-	TableFunctionSet set("lustre_link_inode_dirmap");
+TableFunctionSet LustreLinkInodeDirStripeFunction::GetFunctionSet() {
+	TableFunctionSet set("lustre_link_inode_dirstripe");
 	set.AddFunction(GetFunction(false));
 	set.AddFunction(GetFunction(true));
 	return set;

@@ -39,7 +39,7 @@ All table functions accept either a single device path (`VARCHAR`) or a list of 
 | `lustre_links(device)` / `lustre_links(devices)` | Hard-link entries: inode FID, parent directory FID, and filename |
 | `lustre_layouts(device)` / `lustre_layouts(devices)` | LOV layout components: stripe layout, PFL/FLR/EC metadata, and pool information |
 | `lustre_objects(device)` / `lustre_objects(devices)` | Per-stripe OST object placement |
-| `lustre_dirmap(device)` / `lustre_dirmap(devices)` | Logical-directory mapping for plain directories, DNE1 remote-parent cases, and DNE2 striped directories |
+| `lustre_dirstripe(device)` / `lustre_dirstripe(devices)` | Directory stripe parent rows for plain directories, DNE1 remote-parent cases, and DNE2 striped directories |
 
 ### Scalar Functions
 
@@ -59,7 +59,7 @@ The public table functions accept these named parameters:
 | `skip_no_fid` | `BOOLEAN` | `true` | Skip inodes that do not have a valid Lustre FID |
 | `skip_no_linkea` | `BOOLEAN` | `true` | Skip inodes that do not have LinkEA metadata |
 
-`lustre_dirmap` and the optimizer's internal dirmap fused scans force `skip_no_linkea = false`, because directory mapping depends on link metadata.
+`lustre_dirstripe` and the optimizer's internal dirstripe fused scans force `skip_no_linkea = false`, because directory stripe resolution depends on link metadata.
 
 ## Examples
 
@@ -101,7 +101,7 @@ FROM lustre_inodes(['/dev/mapper/mdt0', '/dev/mapper/mdt1']);
 -- DNE-aware logical directory entry counts
 SELECT d.dir_fid, count(*) AS entry_count
 FROM lustre_links(['/dev/mapper/mdt0', '/dev/mapper/mdt1']) AS l
-JOIN lustre_dirmap(['/dev/mapper/mdt0', '/dev/mapper/mdt1']) AS d
+JOIN lustre_dirstripe(['/dev/mapper/mdt0', '/dev/mapper/mdt1']) AS d
   ON l.parent_fid = d.parent_fid
 JOIN lustre_inodes(['/dev/mapper/mdt0', '/dev/mapper/mdt1']) AS i
   ON i.fid = d.dir_fid
@@ -110,7 +110,7 @@ GROUP BY d.dir_fid;
 
 -- Find directories whose parent lives on another MDT (DNE1)
 SELECT dir_fid, dir_device, lma_incompat
-FROM lustre_dirmap(['/dev/mapper/mdt0', '/dev/mapper/mdt1'])
+FROM lustre_dirstripe(['/dev/mapper/mdt0', '/dev/mapper/mdt1'])
 WHERE lma_incompat & 4 != 0; -- LMAI_REMOTE_PARENT
 ```
 
@@ -120,7 +120,7 @@ WHERE lma_incompat & 4 != 0; -- LMAI_REMOTE_PARENT
 - Projection pushdown and column pruning avoid decoding unused fields.
 - Equality and `IN` predicates on FIDs are pushed down to OI lookups when possible.
 - `lustre_layouts` and `lustre_objects` are most effective when the query filters on `fid`.
-- `lustre_dirmap` normalizes physical namespace-bearing objects to logical directory identities and skips DNE1 agent inodes automatically.
+- `lustre_dirstripe` normalizes namespace-bearing directory stripe objects to logical directory identities and skips DNE1 agent inodes automatically.
 
 ## Optimizer Rewrites
 
@@ -128,9 +128,9 @@ The optimizer can replace common join shapes with internal fused scans. These in
 
 | Query Pattern | Internal Rewrite | Effect |
 |---------------|------------------|--------|
-| `lustre_links JOIN lustre_dirmap ON parent_fid` | `lustre_link_dirmap` | Resolves parent-directory mapping inline |
-| `lustre_inodes JOIN lustre_dirmap ON fid = dir_fid` | `lustre_inode_dirmap` | Scans directory inodes together with dirmap rows |
-| `lustre_links JOIN lustre_dirmap JOIN lustre_inodes` | `lustre_link_inode_dirmap` | Replaces the multi-stage join with a single fused scan plus cached lookups |
+| `lustre_links JOIN lustre_dirstripe ON parent_fid` | `lustre_link_dirstripe` | Resolves parent directory stripe rows inline |
+| `lustre_inodes JOIN lustre_dirstripe ON fid = dir_fid` | `lustre_inode_dirstripe` | Scans directory inodes together with dirstripe rows |
+| `lustre_links JOIN lustre_dirstripe JOIN lustre_inodes` | `lustre_link_inode_dirstripe` | Replaces the multi-stage join with a single fused scan plus cached lookups |
 
 ## Column Reference
 
@@ -197,14 +197,14 @@ The optimizer can replace common join shapes with internal fused scans. These in
 | `ost_oi_seq` | `UBIGINT` | OST object sequence |
 | `device` | `VARCHAR` | Source device path |
 
-### lustre_dirmap
+### lustre_dirstripe
 
-`lustre_dirmap` maps physical namespace-bearing parent objects (plain directories or striped shards) to logical directory identities.
+`lustre_dirstripe` emits directory stripe parent rows. For plain directories the stripe object is the directory itself; for DNE2 striped directories it maps each shard object back to the logical master directory FID.
 
 | Column | Type | Description |
 |--------|------|-------------|
 | `dir_fid` | `VARCHAR` | Logical directory FID (master FID for striped directories, self for plain directories) |
-| `parent_fid` | `VARCHAR` | Physical namespace-bearing object FID (shard FID, or self for plain directories) |
+| `parent_fid` | `VARCHAR` | Namespace-bearing directory stripe object FID (shard FID, or self for plain directories) |
 | `dir_device` | `VARCHAR` | Device where `dir_fid` lives |
 | `parent_device` | `VARCHAR` | Device where `parent_fid` lives |
 | `master_mdt_index` | `UINTEGER` | MDT index of the master directory |
@@ -215,14 +215,14 @@ The optimizer can replace common join shapes with internal fused scans. These in
 | `source` | `VARCHAR` | Row source: `plain`, `master`, or `slave` |
 | `lma_incompat` | `UINTEGER` | LMA incompat flags |
 
-When multiple devices are provided, cross-MDT OI lookup resolves the device columns. Masters emit authoritative shard mappings; slaves are emitted only as fallback when the master cannot be reached. DNE1 agent inodes (`LMAI_AGENT`) are skipped automatically.
+When multiple devices are provided, cross-MDT OI lookup resolves the device columns. Masters emit authoritative shard rows; slaves are emitted only as fallback when the master cannot be reached. DNE1 agent inodes (`LMAI_AGENT`) are skipped automatically.
 
 ### LMA incompat flags
 
 | Flag | Value | Meaning |
 |------|-------|---------|
 | `LMAI_RELEASED` | `0x01` | File released (HSM) |
-| `LMAI_AGENT` | `0x02` | Agent inode (DNE1 remote directory stub); skipped by `lustre_dirmap` |
+| `LMAI_AGENT` | `0x02` | Agent inode (DNE1 remote directory stub); skipped by `lustre_dirstripe` |
 | `LMAI_REMOTE_PARENT` | `0x04` | Parent directory is on a remote MDT |
 | `LMAI_STRIPED` | `0x08` | Striped directory (DNE2) |
 | `LMAI_ORPHAN` | `0x10` | Orphan inode |

@@ -1,10 +1,10 @@
 //===----------------------------------------------------------------------===//
 //                         LustreQuery Extension
 //
-// lustre_dirmap.hpp
+// lustre_dirstripe.hpp
 //
-// Table function for querying Lustre DNE2-aware directory mapping.
-// Maps physical parent FIDs (shard/namespace bearers) to logical directory FIDs.
+// Table function for querying Lustre DNE-aware directory stripe rows.
+// Resolves namespace-bearing stripe FIDs to logical directory FIDs.
 //===----------------------------------------------------------------------===//
 
 #pragma once
@@ -22,9 +22,9 @@ namespace duckdb {
 namespace lustre {
 
 //===----------------------------------------------------------------------===//
-// DirMap Column Index Constants
+// DirStripe Column Index Constants
 //===----------------------------------------------------------------------===//
-enum class DirMapColumnIdx : idx_t {
+enum class DirStripeColumnIdx : idx_t {
 	DIR_FID = 0,
 	PARENT_FID = 1,
 	DIR_DEVICE = 2,
@@ -39,9 +39,9 @@ enum class DirMapColumnIdx : idx_t {
 };
 
 //===----------------------------------------------------------------------===//
-// Global State for lustre_dirmap
+// Global State for lustre_dirstripe
 //===----------------------------------------------------------------------===//
-struct LustreDirMapGlobalState : public GlobalTableFunctionState {
+struct LustreDirStripeGlobalState : public GlobalTableFunctionState {
 	vector<string> device_paths;
 	vector<idx_t> column_ids;
 	MDTScanConfig scan_config;
@@ -100,9 +100,9 @@ struct LustreDirMapGlobalState : public GlobalTableFunctionState {
 };
 
 //===----------------------------------------------------------------------===//
-// Local State for lustre_dirmap (per-thread)
+// Local State for lustre_dirstripe (per-thread)
 //===----------------------------------------------------------------------===//
-struct LustreDirMapLocalState : public LocalTableFunctionState {
+struct LustreDirStripeLocalState : public LocalTableFunctionState {
 	unique_ptr<MDTScanner> scanner;
 	bool scanner_initialized = false;
 	idx_t initialized_device_idx = DConstants::INVALID_INDEX;
@@ -113,7 +113,7 @@ struct LustreDirMapLocalState : public LocalTableFunctionState {
 	int next_block_group_in_batch = 0;
 	int block_group_batch_end = 0;
 
-	vector<LustreDirMapGlobalState::PendingRow> pending_results;
+	vector<LustreDirStripeGlobalState::PendingRow> pending_results;
 	idx_t pending_results_idx = 0;
 
 	//! Cross-MDT OI resolution scanners (following lustre_fid2path.cpp pattern)
@@ -121,7 +121,7 @@ struct LustreDirMapLocalState : public LocalTableFunctionState {
 	vector<string> resolve_device_paths;
 	bool resolve_initialized = false;
 
-	LustreDirMapLocalState() {
+	LustreDirStripeLocalState() {
 		scanner = make_uniq<MDTScanner>();
 	}
 
@@ -163,9 +163,9 @@ struct LustreDirMapLocalState : public LocalTableFunctionState {
 };
 
 //===----------------------------------------------------------------------===//
-// lustre_dirmap Table Function
+// lustre_dirstripe Table Function
 //===----------------------------------------------------------------------===//
-class LustreDirMapFunction {
+class LustreDirStripeFunction {
 public:
 	static TableFunctionSet GetFunctionSet();
 };

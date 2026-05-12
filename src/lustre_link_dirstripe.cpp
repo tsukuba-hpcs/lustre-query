@@ -1,13 +1,13 @@
 //===----------------------------------------------------------------------===//
 //                         LustreQuery Extension
 //
-// lustre_link_dirmap.cpp
+// lustre_link_dirstripe.cpp
 //
-// Fused link/dirmap table function: scans links and resolves parent_fid to
+// Fused link/dirstripe table function: scans links and resolves parent_fid to
 // dir_fid inline via cached LMV lookup.
 //===----------------------------------------------------------------------===//
 
-#include "lustre_link_dirmap.hpp"
+#include "lustre_link_dirstripe.hpp"
 #include "lustre_link_selection.hpp"
 #include "lustre_output_string_cache.hpp"
 #include "lustre_types.hpp"
@@ -27,26 +27,37 @@
 namespace duckdb {
 namespace lustre {
 
-static constexpr idx_t LINK_DIRMAP_SEQ_SCAN_THRESHOLD = 8192;
+static constexpr idx_t LINK_DIRSTRIPE_SEQ_SCAN_THRESHOLD = 8192;
 
 //===----------------------------------------------------------------------===//
 // Column Definitions
 //===----------------------------------------------------------------------===//
 
-static const vector<string> LINK_DIRMAP_COLUMN_NAMES = {
-    "fid",           "parent_fid",       "name",         "device",       "dir_fid",   "dirmap_parent_fid", "dir_device",
-    "parent_device", "master_mdt_index", "stripe_index", "stripe_count", "hash_type", "layout_version",    "source"};
+static const vector<string> LINK_DIRSTRIPE_COLUMN_NAMES = {"fid",
+                                                           "parent_fid",
+                                                           "name",
+                                                           "device",
+                                                           "dir_fid",
+                                                           "dirstripe_parent_fid",
+                                                           "dir_device",
+                                                           "parent_device",
+                                                           "master_mdt_index",
+                                                           "stripe_index",
+                                                           "stripe_count",
+                                                           "hash_type",
+                                                           "layout_version",
+                                                           "source"};
 
-static const vector<LogicalType> LINK_DIRMAP_COLUMN_TYPES = {
+static const vector<LogicalType> LINK_DIRSTRIPE_COLUMN_TYPES = {
     LogicalType::VARCHAR,  LogicalType::VARCHAR,  LogicalType::VARCHAR,  LogicalType::VARCHAR,  LogicalType::VARCHAR,
     LogicalType::VARCHAR,  LogicalType::VARCHAR,  LogicalType::VARCHAR,  LogicalType::UINTEGER, LogicalType::UINTEGER,
     LogicalType::UINTEGER, LogicalType::UINTEGER, LogicalType::UINTEGER, LogicalType::VARCHAR};
 
 //===----------------------------------------------------------------------===//
-// DirMap Resolution Cache
+// DirStripe Resolution Cache
 //===----------------------------------------------------------------------===//
 
-struct DirMapCacheEntry {
+struct DirStripeCacheEntry {
 	LustreFID dir_fid;
 	std::string dir_device;
 	uint32_t master_mdt_index = 0;
@@ -70,7 +81,7 @@ struct FIDHash {
 // Global State
 //===----------------------------------------------------------------------===//
 
-struct LustreLinkDirMapGlobalState : public GlobalTableFunctionState {
+struct LustreLinkDirStripeGlobalState : public GlobalTableFunctionState {
 	vector<string> device_paths;
 	vector<idx_t> column_ids;
 	MDTScanConfig scan_config;
@@ -108,7 +119,7 @@ struct LustreLinkDirMapGlobalState : public GlobalTableFunctionState {
 // Local State
 //===----------------------------------------------------------------------===//
 
-struct LustreLinkDirMapLocalState : public LocalTableFunctionState {
+struct LustreLinkDirStripeLocalState : public LocalTableFunctionState {
 	unique_ptr<MDTScanner> scanner;
 	bool scanner_initialized = false;
 	idx_t initialized_device_idx = DConstants::INVALID_INDEX;
@@ -121,9 +132,9 @@ struct LustreLinkDirMapLocalState : public LocalTableFunctionState {
 	vector<unique_ptr<MDTScanner>> resolve_scanners;
 	vector<string> resolve_device_paths;
 	bool resolve_initialized = false;
-	std::unordered_map<LustreFID, DirMapCacheEntry, FIDHash> dirmap_cache;
+	std::unordered_map<LustreFID, DirStripeCacheEntry, FIDHash> dirstripe_cache;
 
-	LustreLinkDirMapLocalState() {
+	LustreLinkDirStripeLocalState() {
 		scanner = make_uniq<MDTScanner>();
 	}
 
@@ -156,9 +167,9 @@ struct LustreLinkDirMapLocalState : public LocalTableFunctionState {
 		return false;
 	}
 
-	bool ResolveParentFID(const LustreFID &parent_fid, DirMapCacheEntry &out) {
-		auto it = dirmap_cache.find(parent_fid);
-		if (it != dirmap_cache.end()) {
+	bool ResolveParentFID(const LustreFID &parent_fid, DirStripeCacheEntry &out) {
+		auto it = dirstripe_cache.find(parent_fid);
+		if (it != dirstripe_cache.end()) {
 			out = it->second;
 			return true;
 		}
@@ -168,7 +179,7 @@ struct LustreLinkDirMapLocalState : public LocalTableFunctionState {
 		if (!LookupFIDCrossMDT(parent_fid, ino, sidx))
 			return false;
 
-		DirMapCacheEntry entry;
+		DirStripeCacheEntry entry;
 		entry.dir_fid = parent_fid;
 		entry.dir_device = resolve_device_paths[sidx];
 
@@ -210,7 +221,7 @@ struct LustreLinkDirMapLocalState : public LocalTableFunctionState {
 			entry.layout_version = lmv.lmv_layout_version;
 		}
 
-		dirmap_cache[parent_fid] = entry;
+		dirstripe_cache[parent_fid] = entry;
 		out = entry;
 		return true;
 	}
@@ -225,8 +236,8 @@ static unique_ptr<FunctionData> BindSingle(ClientContext &ctx, TableFunctionBind
 	auto r = make_uniq<LustreQueryBindData>();
 	r->device_paths.push_back(StringValue::Get(input.inputs[0]));
 	ParseNamedParameters(input.named_parameters, r->scan_config);
-	names = LINK_DIRMAP_COLUMN_NAMES;
-	return_types = LINK_DIRMAP_COLUMN_TYPES;
+	names = LINK_DIRSTRIPE_COLUMN_NAMES;
+	return_types = LINK_DIRSTRIPE_COLUMN_TYPES;
 	return std::move(r);
 }
 
@@ -236,10 +247,10 @@ static unique_ptr<FunctionData> BindMulti(ClientContext &ctx, TableFunctionBindI
 	for (auto &v : ListValue::GetChildren(input.inputs[0]))
 		r->device_paths.push_back(StringValue::Get(v));
 	if (r->device_paths.empty())
-		throw BinderException("lustre_link_dirmap requires at least one device path");
+		throw BinderException("lustre_link_dirstripe requires at least one device path");
 	ParseNamedParameters(input.named_parameters, r->scan_config);
-	names = LINK_DIRMAP_COLUMN_NAMES;
-	return_types = LINK_DIRMAP_COLUMN_TYPES;
+	names = LINK_DIRSTRIPE_COLUMN_NAMES;
+	return_types = LINK_DIRSTRIPE_COLUMN_TYPES;
 	return std::move(r);
 }
 
@@ -249,7 +260,7 @@ static unique_ptr<FunctionData> BindMulti(ClientContext &ctx, TableFunctionBindI
 
 static unique_ptr<GlobalTableFunctionState> InitGlobal(ClientContext &ctx, TableFunctionInitInput &input) {
 	auto &bind = input.bind_data->Cast<LustreQueryBindData>();
-	auto g = make_uniq<LustreLinkDirMapGlobalState>();
+	auto g = make_uniq<LustreLinkDirStripeGlobalState>();
 	g->device_paths = bind.device_paths;
 	g->column_ids = input.column_ids;
 	g->scan_config = bind.scan_config;
@@ -264,7 +275,7 @@ static unique_ptr<GlobalTableFunctionState> InitGlobal(ClientContext &ctx, Table
 	g->fid_filter = FIDOnlyFilter::Create(input.filters.get(), input.column_ids, 0);
 	g->use_sequential_scan =
 	    g->fid_filter && (g->fid_filter->RequiresGenericEvaluation() || !g->fid_filter->HasFIDFilter() ||
-	                      g->fid_filter->fid_values.size() > LINK_DIRMAP_SEQ_SCAN_THRESHOLD);
+	                      g->fid_filter->fid_values.size() > LINK_DIRSTRIPE_SEQ_SCAN_THRESHOLD);
 	if (g->use_sequential_scan && !g->device_paths.empty()) {
 		MDTScanner probe;
 		probe.Open(g->device_paths[0]);
@@ -279,7 +290,7 @@ static unique_ptr<GlobalTableFunctionState> InitGlobal(ClientContext &ctx, Table
 
 static unique_ptr<LocalTableFunctionState> InitLocal(ExecutionContext &ctx, TableFunctionInitInput &input,
                                                      GlobalTableFunctionState *gs) {
-	return make_uniq<LustreLinkDirMapLocalState>();
+	return make_uniq<LustreLinkDirStripeLocalState>();
 }
 
 //===----------------------------------------------------------------------===//
@@ -287,7 +298,7 @@ static unique_ptr<LocalTableFunctionState> InitLocal(ExecutionContext &ctx, Tabl
 //===----------------------------------------------------------------------===//
 
 static void WriteRow(DataChunk &output, idx_t row, const vector<idx_t> &col_ids, const LustreLink &link,
-                     const DirMapCacheEntry &dm, const string &device, bool dm_valid,
+                     const DirStripeCacheEntry &dm, const string &device, bool dm_valid,
                      LustreOutputStringCache &string_cache) {
 	for (idx_t i = 0; i < col_ids.size(); i++) {
 		auto &vec = output.data[i];
@@ -374,14 +385,14 @@ static void WriteRow(DataChunk &output, idx_t row, const vector<idx_t> &col_ids,
 // Block Group Helpers
 //===----------------------------------------------------------------------===//
 
-static void ResetBG(LustreLinkDirMapLocalState &l) {
+static void ResetBG(LustreLinkDirStripeLocalState &l) {
 	l.block_group_active = false;
 	l.block_group_max_ino = 0;
 	l.next_block_group_in_batch = 0;
 	l.block_group_batch_end = 0;
 }
 
-static bool InitDevice(LustreLinkDirMapGlobalState &g, idx_t dev) {
+static bool InitDevice(LustreLinkDirStripeGlobalState &g, idx_t dev) {
 	if (dev >= g.device_paths.size()) {
 		g.finished = true;
 		return false;
@@ -403,7 +414,7 @@ static bool InitDevice(LustreLinkDirMapGlobalState &g, idx_t dev) {
 	return true;
 }
 
-static bool EnsureScanner(LustreLinkDirMapGlobalState &g, LustreLinkDirMapLocalState &l) {
+static bool EnsureScanner(LustreLinkDirStripeGlobalState &g, LustreLinkDirStripeLocalState &l) {
 	idx_t dev = g.current_device_idx.load();
 	if (l.scanner_initialized && l.initialized_device_idx == dev)
 		return true;
@@ -431,7 +442,7 @@ static bool EnsureScanner(LustreLinkDirMapGlobalState &g, LustreLinkDirMapLocalS
 	return true;
 }
 
-static bool ClaimBG(LustreLinkDirMapGlobalState &g, LustreLinkDirMapLocalState &l) {
+static bool ClaimBG(LustreLinkDirStripeGlobalState &g, LustreLinkDirStripeLocalState &l) {
 	static constexpr int BATCH = 8;
 	if (l.block_group_active)
 		return true;
@@ -458,14 +469,14 @@ static bool ClaimBG(LustreLinkDirMapGlobalState &g, LustreLinkDirMapLocalState &
 //===----------------------------------------------------------------------===//
 
 static void Execute(ClientContext &ctx, TableFunctionInput &data_p, DataChunk &output) {
-	auto &g = data_p.global_state->Cast<LustreLinkDirMapGlobalState>();
-	auto &l = data_p.local_state->Cast<LustreLinkDirMapLocalState>();
+	auto &g = data_p.global_state->Cast<LustreLinkDirStripeGlobalState>();
+	auto &l = data_p.local_state->Cast<LustreLinkDirStripeLocalState>();
 
 	if (g.fid_filter->HasDynamicFilter()) {
 		bool changed = g.fid_filter->ResolveDynamicFilters();
 		if (changed) {
 			g.use_sequential_scan = g.fid_filter->RequiresGenericEvaluation() || !g.fid_filter->HasFIDFilter() ||
-			                        g.fid_filter->fid_values.size() > LINK_DIRMAP_SEQ_SCAN_THRESHOLD;
+			                        g.fid_filter->fid_values.size() > LINK_DIRSTRIPE_SEQ_SCAN_THRESHOLD;
 			g.finished = false;
 			g.next_fid_idx.store(0);
 			g.next_block_group.store(0);
@@ -508,7 +519,7 @@ static void Execute(ClientContext &ctx, TableFunctionInput &data_p, DataChunk &o
 		LustreLink link;
 		if (!l.scanner->GetNextLink(link, g.scan_config, l.block_group_max_ino)) {
 			l.block_group_active = false;
-			l.dirmap_cache.clear();
+			l.dirstripe_cache.clear();
 			g.active_block_groups.fetch_sub(1);
 			continue;
 		}
@@ -518,7 +529,7 @@ static void Execute(ClientContext &ctx, TableFunctionInput &data_p, DataChunk &o
 		if (g.fid_filter->RequiresGenericEvaluation() && !g.fid_filter->EvaluateFID(link.fid))
 			continue;
 
-		DirMapCacheEntry dm;
+		DirStripeCacheEntry dm;
 		bool dm_valid = l.ResolveParentFID(link.parent_fid, dm);
 		WriteRow(output, cnt, g.column_ids, link, dm, l.initialized_device_path, dm_valid, string_cache);
 		cnt++;
@@ -543,35 +554,35 @@ static void SetProps(TableFunction &f) {
 }
 
 static const vector<string> &GetNames() {
-	static const vector<string> n = LINK_DIRMAP_COLUMN_NAMES;
+	static const vector<string> n = LINK_DIRSTRIPE_COLUMN_NAMES;
 	return n;
 }
 static const vector<LogicalType> &GetTypes() {
-	static const vector<LogicalType> t = LINK_DIRMAP_COLUMN_TYPES;
+	static const vector<LogicalType> t = LINK_DIRSTRIPE_COLUMN_TYPES;
 	return t;
 }
 
-const vector<string> &LustreLinkDirMapFunction::GetColumnNames() {
+const vector<string> &LustreLinkDirStripeFunction::GetColumnNames() {
 	return GetNames();
 }
-const vector<LogicalType> &LustreLinkDirMapFunction::GetColumnTypes() {
+const vector<LogicalType> &LustreLinkDirStripeFunction::GetColumnTypes() {
 	return GetTypes();
 }
 
-TableFunction LustreLinkDirMapFunction::GetFunction(bool multi) {
+TableFunction LustreLinkDirStripeFunction::GetFunction(bool multi) {
 	if (multi) {
-		TableFunction f("lustre_link_dirmap", {LogicalType::LIST(LogicalType::VARCHAR)}, Execute, BindMulti, InitGlobal,
-		                InitLocal);
+		TableFunction f("lustre_link_dirstripe", {LogicalType::LIST(LogicalType::VARCHAR)}, Execute, BindMulti,
+		                InitGlobal, InitLocal);
 		SetProps(f);
 		return f;
 	}
-	TableFunction f("lustre_link_dirmap", {LogicalType::VARCHAR}, Execute, BindSingle, InitGlobal, InitLocal);
+	TableFunction f("lustre_link_dirstripe", {LogicalType::VARCHAR}, Execute, BindSingle, InitGlobal, InitLocal);
 	SetProps(f);
 	return f;
 }
 
-TableFunctionSet LustreLinkDirMapFunction::GetFunctionSet() {
-	TableFunctionSet set("lustre_link_dirmap");
+TableFunctionSet LustreLinkDirStripeFunction::GetFunctionSet() {
+	TableFunctionSet set("lustre_link_dirstripe");
 	set.AddFunction(GetFunction(false));
 	set.AddFunction(GetFunction(true));
 	return set;

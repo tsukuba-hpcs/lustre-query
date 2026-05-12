@@ -1,9 +1,9 @@
 //===----------------------------------------------------------------------===//
 //                         LustreQuery Extension
 //
-// lustre_link_dirmap.hpp
+// lustre_link_dirstripe.hpp
 //
-// Internal fused table function for link/dirmap joins.
+// Internal fused table function for link/dirstripe joins.
 // Scans links and resolves parent_fid → dir_fid inline via cached LMV lookup.
 //===----------------------------------------------------------------------===//
 
@@ -15,7 +15,7 @@
 namespace duckdb {
 namespace lustre {
 
-class LustreLinkDirMapFunction {
+class LustreLinkDirStripeFunction {
 public:
 	static TableFunctionSet GetFunctionSet();
 	static TableFunction GetFunction(bool multi_device);
